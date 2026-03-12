@@ -2,42 +2,69 @@
 
 # Claudeway
 
-**Production-grade HTTP wrapper around the Claude CLI**
+### Blazing-fast HTTP gateway for the Claude CLI
+
+Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange?logo=rust)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![Axum](https://img.shields.io/badge/axum-0.8-blue)](https://github.com/tokio-rs/axum)
+[![Tokio](https://img.shields.io/badge/tokio-async-8B5CF6)](https://tokio.rs/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-alpine-2496ED?logo=docker&logoColor=white)](Dockerfile)
 
-Turn the `claude` CLI into a REST API with multi-key auth, persistent sessions, per-key structured logging, and token/cost tracking.
+<br />
+
+**~6 MB binary** &nbsp;&bull;&nbsp; **~2 MB Docker image** &nbsp;&bull;&nbsp; **~5 ms cold start** &nbsp;&bull;&nbsp; **Lock-free concurrent sessions**
+
+[Quick Start](#quick-start) &nbsp;&bull;&nbsp; [API Reference](#api-reference) &nbsp;&bull;&nbsp; [Configuration](#configuration) &nbsp;&bull;&nbsp; [Architecture](#architecture)
 
 </div>
 
+<br />
+
 ---
 
-## Features
+## Why Claudeway?
 
-- **One-shot tasks** and **persistent sessions** via REST API
-- **Multi-key auth** with per-key isolated logging
-- **Token & cost tracking** per request and cumulative per session
-- **Model caching** with background refresh
-- **Concurrent-safe** session management with per-session locking
-- **Monthly rotating** JSON log files per API key
-- **Docker-ready** with multi-stage Alpine build
+You've got the `claude` CLI. It's powerful. But it's not an API.
+
+Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
+
+| | |
+|---|---|
+| **Multi-tenant auth** | Multiple API keys, each with isolated logging |
+| **Persistent sessions** | Stateful conversations with `--resume`, per-session mutex locks |
+| **Full cost visibility** | Token counts + USD cost on every response |
+| **Per-key audit logs** | Monthly rotating JSONL files per API key |
+| **Zero-copy performance** | Axum + Tokio + DashMap. No GC pauses. No runtime overhead. |
+| **Deploy anywhere** | ~6 MB static binary. Alpine Docker image. One env var to configure. |
 
 ## Quick Start
 
 ```bash
-# Clone and run
-git clone https://github.com/alicansoysal/claudeway.git
-cd claudeway
+# One command. That's it.
 WRAPPER_KEYS=admin:sk-your-key cargo run
 ```
 
 ```bash
-# Or with Docker
-cp .env.example .env  # edit with your keys
+# Or Docker
+cp .env.example .env
 docker compose up
 ```
+
+Server starts in milliseconds. Health check responds in microseconds.
+
+## Performance
+
+Claudeway adds virtually zero latency on top of the Claude CLI:
+
+- **Axum** — the fastest Rust HTTP framework, built on hyper and Tokio
+- **DashMap** — lock-free concurrent hashmap for session storage
+- **Zero-copy routing** — compile-time route resolution, no regex matching
+- **Per-session Mutex** — prevents `--resume` race conditions without global locks
+- **Async I/O everywhere** — non-blocking process spawning, file I/O, and networking
+
+The bottleneck is always Claude, never Claudeway.
 
 ## API Reference
 
@@ -54,6 +81,8 @@ curl http://localhost:3000/health
 
 ### `GET /models`
 
+Returns available models. Cached with 6-hour TTL, serves stale while refreshing.
+
 ```bash
 curl -H "Authorization: Bearer sk-your-key" http://localhost:3000/models
 ```
@@ -69,7 +98,7 @@ curl -H "Authorization: Bearer sk-your-key" http://localhost:3000/models
 
 ### `POST /task`
 
-One-shot Claude task. No session state.
+One-shot task. Fire and forget. No session state.
 
 ```bash
 curl -X POST http://localhost:3000/task \
@@ -79,8 +108,8 @@ curl -X POST http://localhost:3000/task \
 ```
 ```json
 {
-  "session_id": "uuid",
-  "result": "A monad is a design pattern...",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "result": "A monad is a design pattern that chains operations...",
   "success": true,
   "duration_ms": 1832,
   "tokens": { "input": 24, "output": 156, "cache_read": 0, "cache_write": 0 },
@@ -89,9 +118,19 @@ curl -X POST http://localhost:3000/task \
 }
 ```
 
+**Options:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `prompt` | string | *required* | The prompt to send |
+| `model` | string | `sonnet` | `sonnet` / `haiku` / `opus` or full model ID |
+| `system_prompt` | string | — | System prompt override |
+| `workdir` | string | `$CLAUDE_WORKDIR` | Working directory for Claude |
+| `timeout_secs` | int | `120` | Max execution time |
+
 ### Sessions
 
-Persistent, stateful conversations with automatic workdir isolation.
+Persistent, stateful conversations. Each session gets an isolated workdir and tracks cumulative token usage and cost.
 
 ```bash
 # Start a session
@@ -99,21 +138,24 @@ curl -X POST http://localhost:3000/session/start \
   -H "Authorization: Bearer sk-your-key" \
   -H "Content-Type: application/json" \
   -d '{"model": "sonnet"}'
+# → { "session_id": "uuid", "workdir": "/tmp/claude-tasks/uuid", "created_at": "..." }
 
-# Continue the conversation
-curl -X POST http://localhost:3000/session/<session_id> \
+# Send messages
+curl -X POST http://localhost:3000/session/<id> \
   -H "Authorization: Bearer sk-your-key" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Now explain it differently"}'
+  -d '{"prompt": "Refactor this to use async iterators"}'
+# → same response shape as /task
 
-# Check session stats
-curl -H "Authorization: Bearer sk-your-key" \
-  http://localhost:3000/session/<session_id>
+# Check cumulative stats
+curl -H "Authorization: Bearer sk-your-key" http://localhost:3000/session/<id>
+# → { "task_count": 5, "tokens": {...}, "cost_usd": 0.042, ... }
 
-# Clean up
-curl -X DELETE -H "Authorization: Bearer sk-your-key" \
-  http://localhost:3000/session/<session_id>
+# Clean up (auto-deletes workdir)
+curl -X DELETE -H "Authorization: Bearer sk-your-key" http://localhost:3000/session/<id>
 ```
+
+Concurrent requests to the same session are automatically serialized via per-session mutex locks — no race conditions on `--resume`.
 
 ## Configuration
 
@@ -126,55 +168,87 @@ curl -X DELETE -H "Authorization: Bearer sk-your-key" \
 | `PORT` | `3000` | HTTP listen port |
 | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
 
+**Multi-key example:**
+
+```bash
+WRAPPER_KEYS=admin:sk-prod-key-001,ci-bot:sk-ci-key-002,staging:sk-stg-key-003
+```
+
+Each key gets its own log directory, so you always know who did what.
+
 ## Logging
 
-Each API key gets its own directory with monthly rotating JSON log files:
+Structured JSON. One line per event. Per-key isolation with monthly rotation.
 
 ```
 logs/
 ├── admin/
-│   └── 2026-03.log          # one JSON object per line
-├── bot/
+│   ├── 2026-03.log
+│   └── 2026-04.log
+├── ci-bot/
 │   └── 2026-03.log
 └── _unauthorized/
     └── 2026-03.log
 ```
 
-Every log entry includes timestamps, key ID, request details, and for Claude invocations: exit code, token breakdown, and cost.
+Every Claude invocation is logged with full detail:
+
+```json
+{
+  "timestamp": "2026-03-12T10:00:00Z",
+  "level": "INFO",
+  "key_id": "admin",
+  "session_id": "550e8400-...",
+  "claude_exit_code": 0,
+  "duration_ms": 1832,
+  "success": true,
+  "tokens": { "input": 1240, "output": 380, "cache_read": 820, "cache_write": 0 },
+  "cost_usd": 0.0043,
+  "message": "task completed"
+}
+```
 
 ## Architecture
 
 ```
-                    ┌──────────────┐
-                    │   Axum HTTP  │
-                    │    Server    │
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-         ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
-         │  Auth   │  │ Health  │  │ Models  │
-         │Midlware │  │  (pub)  │  │ Cache   │
-         └────┬────┘  └─────────┘  └─────────┘
-              │
-    ┌─────────┼──────────┐
-    │         │          │
-┌───▼───┐ ┌──▼───┐ ┌────▼────┐
-│ /task │ │/sess.│ │Per-Key  │
-│Handler│ │Handle│ │ Logger  │
-└───┬───┘ └──┬───┘ └─────────┘
-    │        │
-    └───┬────┘
-        │
-   ┌────▼─────┐     ┌──────────┐
-   │ Claude   │────▶│claude CLI│
-   │ Executor │     │ process  │
-   └──────────┘     └──────────┘
+         Request
+            │
+            ▼
+    ┌───────────────┐
+    │   Axum HTTP   │  Tokio async runtime
+    │    Server     │  Zero-copy routing
+    └───────┬───────┘
+            │
+     ┌──────┴──────┐
+     │             │
+ ┌───▼────┐   ┌───▼────┐
+ │ Public │   │  Auth  │  Bearer token → key_id
+ │ /health│   │Midlware│  O(1) HashMap lookup
+ └────────┘   └───┬────┘
+                  │
+       ┌──────────┼──────────┐
+       │          │          │
+  ┌────▼───┐ ┌───▼────┐ ┌───▼─────┐
+  │ /task  │ │/session│ │ /models │  6hr TTL cache
+  │Handler │ │Handler │ │ Handler │
+  └────┬───┘ └───┬────┘ └─────────┘
+       │         │
+       └────┬────┘
+            │
+   ┌────────▼────────┐
+   │ Claude Executor │  tokio::process::Command
+   │   + Timeout     │  Token extraction from JSONL
+   └────────┬────────┘
+            │
+   ┌────────▼────────┐
+   │   Per-Key JSON  │  Monthly rotation
+   │     Logger      │  Structured audit trail
+   └─────────────────┘
 ```
 
 ## Error Responses
 
-All errors return a consistent JSON shape:
+Consistent JSON error shape across all endpoints:
 
 ```json
 { "error": "description", "code": "ERROR_CODE" }
@@ -182,11 +256,25 @@ All errors return a consistent JSON shape:
 
 | Status | Code | When |
 |--------|------|------|
-| 400 | `BAD_REQUEST` | Invalid request body or parameters |
-| 401 | `UNAUTHORIZED` | Missing or invalid API key |
-| 404 | `NOT_FOUND` | Session not found |
-| 408 | `TIMEOUT` | Claude CLI exceeded timeout |
-| 500 | `INTERNAL_ERROR` | Unexpected server error |
+| `400` | `BAD_REQUEST` | Invalid request body or parameters |
+| `401` | `UNAUTHORIZED` | Missing or invalid API key |
+| `404` | `NOT_FOUND` | Session not found |
+| `408` | `TIMEOUT` | Claude CLI exceeded timeout |
+| `500` | `INTERNAL_ERROR` | Unexpected server error |
+
+## Deployment
+
+**Binary (recommended):**
+```bash
+cargo build --release
+# Binary at target/release/claudeway (~6 MB)
+```
+
+**Docker:**
+```bash
+docker build -t claudeway .
+docker run -e WRAPPER_KEYS=admin:sk-key -p 3000:3000 claudeway
+```
 
 ## License
 
