@@ -325,24 +325,9 @@ async fn handle_message(
                 }
             };
 
-            // Create a new topic (or reuse existing thread for General-topic messages)
+            // Reuse existing topic if message came from one, otherwise create new
             let tid = if let Some(existing_tid) = thread_id {
-                // Message came from an existing topic (e.g. General) — create a new topic anyway
-                let topic_name = "Selecting repo...";
-                match create_forum_topic(client, bot_token, chat_id, topic_name).await {
-                    Ok(tid) => tid,
-                    Err(e) => {
-                        let _ = send_message(
-                            client,
-                            bot_token,
-                            chat_id,
-                            Some(existing_tid),
-                            &format!("Failed to create topic: {e}"),
-                        )
-                        .await;
-                        return;
-                    }
-                }
+                existing_tid
             } else {
                 let topic_name = "Selecting repo...";
                 match create_forum_topic(client, bot_token, chat_id, topic_name).await {
