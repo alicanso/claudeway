@@ -96,7 +96,7 @@ async fn main() -> anyhow::Result<()> {
     let plugin_config = config::PluginConfig::load(config.config_path.as_deref())?;
 
     // Build plugin registry
-    let plugin_list = plugins::plugin_registry(&plugin_config, &config.disabled_plugins);
+    let plugin_list = plugins::plugin_registry(&plugin_config, &config.disabled_plugins, &config.enabled_plugins);
 
     // Register plugins
     let mut event_bus = plugin::EventBus::new();

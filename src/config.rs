@@ -38,6 +38,10 @@ struct Cli {
     /// Disable specific plugins (overrides config file)
     #[arg(long, value_delimiter = ',')]
     disable_plugin: Vec<String>,
+
+    /// Enable specific plugins (overrides config file)
+    #[arg(long, value_delimiter = ',')]
+    enable_plugin: Vec<String>,
 }
 
 pub struct Config {
@@ -52,6 +56,7 @@ pub struct Config {
     pub generated_key: Option<String>,
     pub config_path: Option<PathBuf>,
     pub disabled_plugins: Vec<String>,
+    pub enabled_plugins: Vec<String>,
 }
 
 impl Config {
@@ -82,6 +87,7 @@ impl Config {
             generated_key,
             config_path: cli.config,
             disabled_plugins: cli.disable_plugin,
+            enabled_plugins: cli.enable_plugin,
         })
     }
 
@@ -208,15 +214,34 @@ impl PluginConfig {
         }
     }
 
-    pub fn is_plugin_enabled(&self, name: &str, disabled_plugins: &[String]) -> bool {
+    pub fn is_plugin_enabled(
+        &self,
+        name: &str,
+        disabled_plugins: &[String],
+        enabled_plugins: &[String],
+    ) -> bool {
+        // CLI --disable-plugin always wins
         if disabled_plugins.iter().any(|d| d == name) {
             return false;
         }
+        // CLI --enable-plugin overrides config
+        if enabled_plugins.iter().any(|e| e == name) {
+            return true;
+        }
+        // Config file, default = false (disabled)
         self.plugins
             .get(name)
             .and_then(|v| v.get("enabled"))
             .and_then(|v| v.as_bool())
-            .unwrap_or(true) // enabled by default if compiled in
+            .unwrap_or(false)
+    }
+
+    pub fn get_str(&self, plugin: &str, key: &str) -> Option<String> {
+        self.plugins
+            .get(plugin)
+            .and_then(|v| v.get(key))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 }
 
@@ -276,16 +301,24 @@ mod tests {
     }
 
     #[test]
-    fn test_plugin_config_default_enabled() {
+    fn test_plugin_config_default_disabled() {
         let config = PluginConfig::default();
-        assert!(config.is_plugin_enabled("dashboard", &[]));
+        assert!(!config.is_plugin_enabled("dashboard", &[], &[]));
     }
 
     #[test]
-    fn test_plugin_config_disabled_by_cli() {
+    fn test_plugin_config_enabled_by_cli() {
+        let config = PluginConfig::default();
+        let enabled = vec!["dashboard".to_string()];
+        assert!(config.is_plugin_enabled("dashboard", &[], &enabled));
+    }
+
+    #[test]
+    fn test_plugin_config_disabled_by_cli_wins() {
         let config = PluginConfig::default();
         let disabled = vec!["dashboard".to_string()];
-        assert!(!config.is_plugin_enabled("dashboard", &disabled));
+        let enabled = vec!["dashboard".to_string()];
+        assert!(!config.is_plugin_enabled("dashboard", &disabled, &enabled));
     }
 
     #[test]
@@ -295,7 +328,7 @@ mod tests {
             enabled = false
         "#;
         let config: PluginConfig = toml_crate::from_str(toml_str).unwrap();
-        assert!(!config.is_plugin_enabled("dashboard", &[]));
+        assert!(!config.is_plugin_enabled("dashboard", &[], &[]));
     }
 
     #[test]
@@ -305,6 +338,6 @@ mod tests {
             enabled = true
         "#;
         let config: PluginConfig = toml_crate::from_str(toml_str).unwrap();
-        assert!(config.is_plugin_enabled("swagger", &[]));
+        assert!(config.is_plugin_enabled("swagger", &[], &[]));
     }
 }

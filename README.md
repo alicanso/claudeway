@@ -44,7 +44,8 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 - [Plugins](#plugins)
   - [Dashboard](#dashboard)
   - [Swagger UI](#swagger-ui)
-  - [Disabling Plugins](#disabling-plugins)
+  - [Telegram](#telegram)
+  - [Slack](#slack)
 - [Logging](#logging)
 - [Performance](#performance)
 - [Architecture](#architecture)
@@ -338,6 +339,7 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `-p, --port` | `PORT` | `3000` | HTTP listen port |
 | `--log-level` | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
 | `--config` | — | `./claudeway.toml` | Path to config file |
+| `--enable-plugin` | — | — | Enable plugins by name (comma-separated) |
 | `--disable-plugin` | — | — | Disable plugins by name (comma-separated) |
 
 ### API Keys
@@ -379,15 +381,11 @@ Precedence: **defaults → config file → CLI flags** (last wins).
 
 ## Plugins
 
-Claudeway is built on a plugin architecture. Each plugin is compiled in via a Cargo feature flag and can be disabled at runtime.
+All plugins are included in the binary but **disabled by default**. Enable them in `claudeway.toml` or via `--enable-plugin`.
 
 ### Dashboard
 
 Built-in admin dashboard — a Svelte SPA embedded directly in the binary. Open `http://localhost:3000/dashboard` and log in with the **first API key** (the admin key).
-
-```bash
-cargo build --release --features dashboard
-```
 
 | Page | Description |
 |------|-------------|
@@ -419,25 +417,44 @@ Admin key = first key in your `--keys` list. Sessions expire after 1 hour.
 
 Auto-generated OpenAPI 3.1 spec served at `/docs`.
 
-```bash
-cargo build --release --features swagger
+### Telegram
+
+Forwards request/session events to a Telegram chat via bot API.
+
+```toml
+[plugins.telegram]
+enabled = true
+bot_token = "123456:ABC-DEF..."
+chat_id = "-1001234567890"
 ```
 
-### Disabling Plugins
+### Slack
 
-Plugins compiled in are enabled by default. Disable at runtime:
+Posts request/session events to a Slack channel via incoming webhook.
+
+```toml
+[plugins.slack]
+enabled = true
+webhook_url = "https://hooks.slack.com/services/T.../B.../..."
+```
+
+### Enabling & Disabling Plugins
+
+All plugins are **disabled by default**. Enable them in `claudeway.toml` or via CLI:
 
 ```bash
-# Via CLI
+# Enable via CLI
+claudeway --enable-plugin dashboard,swagger
+
+# Disable via CLI (overrides config)
 claudeway --disable-plugin swagger
-claudeway --disable-plugin dashboard,swagger
-
-# Via config file (claudeway.toml)
-# [plugins.swagger]
-# enabled = false
 ```
 
-Build without a feature to exclude it entirely — no extra binary size.
+```toml
+# Via config file (claudeway.toml)
+[plugins.dashboard]
+enabled = true
+```
 
 ## Logging
 
@@ -528,8 +545,8 @@ The bottleneck is always Claude, never Claudeway.
 ## Deployment
 
 ```bash
-# All features
-cargo build --release --features "dashboard,swagger"
+# From source
+cargo build --release
 
 # Docker Compose
 cp .env.example .env    # edit with your keys
