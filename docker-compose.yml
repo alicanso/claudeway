@@ -1,0 +1,19 @@
+services:
+  claudeway:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - WRAPPER_KEYS=${WRAPPER_KEYS}
+      - CLAUDE_BIN=${CLAUDE_BIN:-claude}
+      - CLAUDE_WORKDIR=${CLAUDE_WORKDIR:-/tmp/claude-tasks}
+      - LOG_DIR=${LOG_DIR:-/var/log/claudeway}
+      - PORT=${PORT:-3000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./logs:/var/log/claudeway
+      - claude-tasks:/tmp/claude-tasks
+    restart: unless-stopped
+
+volumes:
+  claude-tasks:
