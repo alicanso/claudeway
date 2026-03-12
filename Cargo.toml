@@ -2,6 +2,11 @@
 name = "claudeway"
 version = "0.1.0"
 edition = "2024"
+description = "Production-grade HTTP wrapper around the Claude CLI"
+license = "MIT"
+repository = "https://github.com/alicanso/claudeway"
+keywords = ["claude", "api", "wrapper", "axum", "llm"]
+categories = ["web-programming::http-server", "command-line-utilities"]
 
 [dependencies]
 axum = "0.8"
