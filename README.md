@@ -32,7 +32,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
   - [Multi-turn Session](#multi-turn-session)
   - [CI/CD Pipeline Integration](#cicd-pipeline-integration)
   - [Batch Processing](#batch-processing)
-  - [Cost Tracking Dashboard](#cost-tracking-dashboard)
+  - [Cost Tracking](#cost-tracking)
 - [API Reference](#api-reference)
   - [GET /health](#get-health)
   - [GET /models](#get-models)
@@ -71,42 +71,15 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 
 ## Quick Start
 
-### 1. Install the Claude CLI
-
-Claudeway is an HTTP gateway for the [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli). Install it first:
+**Prerequisites:** [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) installed (`npm install -g @anthropic-ai/claude-code`)
 
 ```bash
-npm install -g @anthropic-ai/claude-code
-```
+# Clone and build
+git clone https://github.com/alicanso/claudeway && cd claudeway
+cargo build --release
 
-### 2. Run Claudeway
-
-No configuration required. Claudeway generates an API key for you on startup.
-
-**Docker** (no Rust required):
-
-```bash
-docker run -p 3000:3000 claudeway
-```
-
-**Pre-built binary** (no Rust required):
-
-```bash
-# macOS (Apple Silicon)
-curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-aarch64-apple-darwin -o claudeway && chmod +x claudeway && ./claudeway
-
-# macOS (Intel)
-curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-apple-darwin -o claudeway && chmod +x claudeway && ./claudeway
-
-# Linux (x86_64)
-curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-unknown-linux-musl -o claudeway && chmod +x claudeway && ./claudeway
-```
-
-**From source** (Rust developers):
-
-```bash
-cargo install --git https://github.com/alicanso/claudeway
-claudeway
+# Run — an API key is generated automatically
+./target/release/claudeway
 ```
 
 On startup you'll see:
@@ -119,17 +92,18 @@ On startup you'll see:
   Use it as: curl -H "Authorization: Bearer sk-a7f3b2e19c..." http://localhost:3000/task
   To set your own keys, use --keys or WRAPPER_KEYS env var.
 
-Claudeway v0.1.0 listening on 0.0.0.0:3000
+Claudeway v0.2.0 listening on 0.0.0.0:3000
 ```
 
-### 3. Verify
-
 ```bash
-# Health check (no auth required)
+# Health check
 curl http://localhost:3000/health
 
-# List models (use the key printed at startup)
-curl -H "Authorization: Bearer sk-a7f3b2e19c..." http://localhost:3000/models
+# Send a task
+curl -X POST http://localhost:3000/task \
+  -H "Authorization: Bearer sk-a7f3b2e19c..." \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Explain monads in one sentence"}'
 ```
 
 ## Examples
@@ -256,7 +230,7 @@ All endpoints except `/health` require `Authorization: Bearer <key>`.
 curl http://localhost:3000/health
 ```
 ```json
-{ "status": "ok", "version": "0.1.0", "uptime_secs": 42 }
+{ "status": "ok", "version": "0.2.0", "uptime_secs": 42 }
 ```
 
 ### `GET /models`
