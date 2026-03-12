@@ -8,8 +8,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use utoipa::OpenApi;
-#[cfg(feature = "swagger")]
-use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
 mod claude;
@@ -21,14 +19,6 @@ mod models;
 mod session;
 mod plugin;
 mod plugins;
-#[cfg(feature = "dashboard")]
-mod admin_auth;
-#[cfg(feature = "dashboard")]
-mod admin_models;
-#[cfg(feature = "dashboard")]
-mod admin_stats;
-#[cfg(feature = "dashboard")]
-mod dashboard;
 
 use config::Config;
 use handlers::models::ModelsCache;
@@ -92,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = Arc::new(config);
-    let start_time = Arc::new(Instant::now());
+    let start_time = Instant::now();
     let request_counter = Arc::new(AtomicU64::new(0));
     let store = Arc::new(SessionStore::new());
     let models_cache = Arc::new(ModelsCache::new());
@@ -102,23 +92,48 @@ async fn main() -> anyhow::Result<()> {
     // Ensure base workdir exists
     tokio::fs::create_dir_all(&config.claude_workdir).await?;
 
+    // Load plugin config
+    let plugin_config = config::PluginConfig::load(config.config_path.as_deref())?;
+
+    // Build plugin registry
+    let plugin_list = plugins::plugin_registry(&plugin_config, &config.disabled_plugins);
+
+    // Register plugins
+    let mut event_bus = plugin::EventBus::new();
+    let mut plugin_routes = Router::new();
+    for p in &plugin_list {
+        let mut registrar = plugin::PluginRegistrar::new();
+        p.on_register(&mut registrar)?;
+        let (router, subscriptions) = registrar.build();
+        if let Some(r) = router {
+            plugin_routes = plugin_routes.merge(r);
+        }
+        event_bus.register(p.clone(), &subscriptions);
+    }
+    let event_bus = Arc::new(event_bus);
+
+    // Create PluginContext
+    let plugin_ctx = plugin::PluginContext::new(
+        store.clone(),
+        logger.clone(),
+        config.clone(),
+        request_counter.clone(),
+        models_cache.clone(),
+        event_bus,
+        start_time,
+    );
+
     let api_keys = Arc::new(config.api_keys.clone());
 
-    // Public routes (no auth) — health + docs
-    let mut public_routes = Router::new()
+    // Public routes (no auth) — health
+    let public_routes = Router::new()
         .route(
             "/health",
             get({
-                let start_time = start_time.clone();
-                move || handlers::health::health(start_time.clone())
+                let start = start_time;
+                move || handlers::health::health(Arc::new(start))
             }),
         );
-
-    #[cfg(feature = "swagger")]
-    {
-        public_routes = public_routes
-            .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()));
-    }
 
     // Protected routes (auth required)
     let protected_routes = Router::new()
@@ -146,39 +161,20 @@ async fn main() -> anyhow::Result<()> {
         .layer(Extension(store.clone()))
         .layer(Extension(logger.clone()));
 
-    #[cfg(feature = "dashboard")]
-    let admin_session_store = Arc::new(admin_auth::AdminSessionStore::new());
+    // Dashboard handlers still extract individual Extension<Arc<...>> types.
+    // Layer them on plugin_routes so they're available.
+    let plugin_routes = plugin_routes
+        .layer(Extension(config.clone()))
+        .layer(Extension(Arc::new(start_time)))
+        .layer(Extension(request_counter.clone()))
+        .layer(Extension(store.clone()))
+        .layer(Extension(logger.clone()));
 
-    #[cfg(feature = "dashboard")]
-    let admin_routes = {
-        use axum::routing::{get, post};
-        Router::new()
-            .route("/admin/login", post(handlers::admin::login))
-            .route("/admin/overview", get(handlers::admin::overview))
-            .route("/admin/sessions", get(handlers::admin::list_sessions))
-            .route("/admin/sessions/{id}", get(handlers::admin::get_session_detail))
-            .route("/admin/logs", get(handlers::admin::get_logs))
-            .route("/admin/keys", get(handlers::admin::get_keys))
-            .route("/admin/costs", get(handlers::admin::get_costs))
-            .layer(Extension(config.clone()))
-            .layer(Extension(admin_session_store.clone()))
-            .layer(Extension(start_time.clone()))
-            .layer(Extension(request_counter.clone()))
-            .layer(Extension(store.clone()))
-            .layer(Extension(logger.clone()))
-    };
-
-    let mut app = Router::new()
+    let app = Router::new()
         .merge(public_routes)
-        .merge(protected_routes);
-
-    #[cfg(feature = "dashboard")]
-    {
-        app = app
-            .merge(admin_routes)
-            .route("/dashboard", axum::routing::get(dashboard::serve_dashboard))
-            .route("/dashboard/{*rest}", axum::routing::get(dashboard::serve_dashboard));
-    }
+        .merge(protected_routes)
+        .merge(plugin_routes)
+        .layer(Extension(plugin_ctx.clone()));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
