@@ -74,13 +74,10 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 **Prerequisites:** [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) installed (`npm install -g @anthropic-ai/claude-code`)
 
 ```bash
-# Download and extract
-curl -sL https://github.com/alicanso/claudeway/archive/refs/tags/v0.2.0.zip -o claudeway.zip
-unzip claudeway.zip && cd claudeway-0.2.0
-
-# Build and run
-cargo build --release
-./target/release/claudeway
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/alicanso/claudeway/releases/download/v0.2.0/claudeway-aarch64-apple-darwin -o claudeway
+chmod +x claudeway
+./claudeway
 ```
 
 On startup you'll see:
