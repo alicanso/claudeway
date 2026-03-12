@@ -21,6 +21,8 @@ mod models;
 mod session;
 #[cfg(feature = "dashboard")]
 mod admin_auth;
+#[cfg(feature = "dashboard")]
+mod admin_models;
 
 use config::Config;
 use handlers::models::ModelsCache;
