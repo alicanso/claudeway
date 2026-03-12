@@ -17,11 +17,35 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 
 **~3 MB binary** &nbsp;&bull;&nbsp; **Alpine Docker image** &nbsp;&bull;&nbsp; **Lock-free concurrent sessions**
 
-[Quick Start](#quick-start) &nbsp;&bull;&nbsp; [API Reference](#api-reference) &nbsp;&bull;&nbsp; [Configuration](#configuration) &nbsp;&bull;&nbsp; [Architecture](#architecture)
-
 </div>
 
 <br />
+
+---
+
+## Table of Contents
+
+- [Why Claudeway?](#why-claudeway)
+- [Quick Start](#quick-start)
+- [Examples](#examples)
+  - [One-shot Code Review](#one-shot-code-review)
+  - [Multi-turn Session](#multi-turn-session)
+  - [CI/CD Pipeline Integration](#cicd-pipeline-integration)
+  - [Batch Processing](#batch-processing)
+  - [Cost Tracking Dashboard](#cost-tracking-dashboard)
+- [API Reference](#api-reference)
+  - [GET /health](#get-health)
+  - [GET /models](#get-models)
+  - [POST /task](#post-task)
+  - [Sessions](#sessions)
+- [Configuration](#configuration)
+  - [API Keys](#api-keys)
+- [Logging](#logging)
+- [Performance](#performance)
+- [Architecture](#architecture)
+- [Deployment](#deployment)
+- [Error Responses](#error-responses)
+- [License](#license)
 
 ---
 
@@ -104,17 +128,130 @@ curl http://localhost:3000/health
 curl -H "Authorization: Bearer sk-a7f3b2e19c..." http://localhost:3000/models
 ```
 
-## Performance
+## Examples
 
-Claudeway adds virtually zero latency on top of the Claude CLI:
+### One-shot Code Review
 
-- **Axum** — the fastest Rust HTTP framework, built on hyper and Tokio
-- **DashMap** — lock-free concurrent hashmap for session storage
-- **Zero-copy routing** — compile-time route resolution, no regex matching
-- **Per-session Mutex** — prevents `--resume` race conditions without global locks
-- **Async I/O everywhere** — non-blocking process spawning, file I/O, and networking
+Send a file for instant code review — no session needed.
 
-The bottleneck is always Claude, never Claudeway.
+```bash
+curl -X POST http://localhost:3000/task \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Review this code for bugs, security issues, and performance:\n\n'"$(cat src/main.rs)"'",
+    "model": "sonnet"
+  }'
+```
+
+### Multi-turn Session
+
+Build a stateful conversation — Claude remembers the full context across messages.
+
+```bash
+# Start a session
+SESSION=$(curl -s -X POST http://localhost:3000/session/start \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "sonnet"}' | jq -r '.session_id')
+
+# First message — set the context
+curl -s -X POST http://localhost:3000/session/$SESSION \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "I have a Rust web app using Axum. I need to add rate limiting."}'
+
+# Follow-up — Claude remembers the previous context
+curl -s -X POST http://localhost:3000/session/$SESSION \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Now add per-IP tracking with a sliding window algorithm."}'
+
+# Check cumulative cost
+curl -s -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  http://localhost:3000/session/$SESSION | jq '{cost_usd, tokens}'
+
+# Clean up
+curl -s -X DELETE -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  http://localhost:3000/session/$SESSION
+```
+
+### CI/CD Pipeline Integration
+
+Automate code review in your GitHub Actions workflow.
+
+```yaml
+# .github/workflows/ai-review.yml
+name: AI Code Review
+on: [pull_request]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get diff
+        run: git diff origin/main...HEAD > /tmp/diff.txt
+
+      - name: AI Review
+        run: |
+          RESPONSE=$(curl -s -X POST ${{ secrets.CLAUDEWAY_URL }}/task \
+            -H "Authorization: Bearer ${{ secrets.CLAUDEWAY_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg diff "$(cat /tmp/diff.txt)" '{
+              prompt: ("Review this PR diff. Flag bugs, security issues, and suggest improvements:\n\n" + $diff),
+              model: "sonnet",
+              timeout_secs: 300
+            }')")
+          echo "$RESPONSE" | jq -r '.result'
+```
+
+### Batch Processing
+
+Process multiple files in parallel using `xargs`.
+
+```bash
+# Analyze all Python files in a project
+find ./src -name "*.py" | xargs -P 4 -I {} sh -c '
+  RESULT=$(curl -s -X POST http://localhost:3000/task \
+    -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"prompt\": \"Analyze this file for type safety issues and suggest type hints:\\n\\n$(cat {})\",
+      \"model\": \"haiku\"
+    }")
+  echo "=== {} ==="
+  echo "$RESULT" | jq -r ".result"
+'
+```
+
+### Cost Tracking Dashboard
+
+Monitor usage and cost across all sessions.
+
+```bash
+# Get cost for a specific session
+curl -s -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  http://localhost:3000/session/$SESSION_ID | jq '{
+    task_count,
+    total_tokens: (.tokens.input + .tokens.output),
+    cost_usd
+  }'
+
+# Parse daily costs from logs
+cat logs/admin/2026-03.log | jq -s '
+  group_by(.timestamp[:10]) |
+  map({
+    date: .[0].timestamp[:10],
+    requests: length,
+    total_cost: (map(.cost_usd) | add),
+    total_tokens: (map(.tokens.input + .tokens.output) | add)
+  })
+'
+```
 
 ## API Reference
 
@@ -274,6 +411,18 @@ Every Claude invocation is logged with full detail:
   "message": "task completed"
 }
 ```
+
+## Performance
+
+Claudeway adds virtually zero latency on top of the Claude CLI:
+
+- **Axum** — the fastest Rust HTTP framework, built on hyper and Tokio
+- **DashMap** — lock-free concurrent hashmap for session storage
+- **Zero-copy routing** — compile-time route resolution, no regex matching
+- **Per-session Mutex** — prevents `--resume` race conditions without global locks
+- **Async I/O everywhere** — non-blocking process spawning, file I/O, and networking
+
+The bottleneck is always Claude, never Claudeway.
 
 ## Architecture
 
