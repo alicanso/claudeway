@@ -284,10 +284,10 @@ async fn handle_message(
                 Some((tid, "awaiting"))
             }
             Some(_) => Some((tid, "active")),
-            None => Some((tid, "new")), // thread exists but no session (e.g. General topic)
+            None => Some((tid, "new")),
         }
     } else {
-        None // no thread_id at all
+        None
     };
 
     let (effective_thread_id, prompt) = match session_state {
