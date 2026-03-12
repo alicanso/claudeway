@@ -541,9 +541,19 @@ async fn handle_message(
     // Wait for streaming handler to finish, get message IDs it created
     let sent_message_ids = stream_handle.await.unwrap_or_default();
 
-    let response_text = match result {
-        Ok(text) => text,
-        Err(e) => format!("Error: {e}"),
+    let (response_text, permission_denials) = match result {
+        Ok(claude_result) => {
+            let text = claude_result.result.clone().unwrap_or_else(|| "No response from Claude.".to_string());
+            (text, claude_result.permission_denials)
+        }
+        Err(e) => {
+            let err_msg = format!("{e}");
+            if err_msg.contains("timed out") {
+                ("Claude did not respond in time. Try again.".to_string(), Vec::new())
+            } else {
+                (format!("Claude error: {err_msg}"), Vec::new())
+            }
+        }
     };
 
     // Final update — ensure complete text is displayed correctly
@@ -562,6 +572,134 @@ async fn handle_message(
                 chunk,
             )
             .await;
+        }
+    }
+
+    // Handle permission denials with inline keyboard
+    if !permission_denials.is_empty() {
+        let mut denial_text = String::from("<b>Claude izin istiyor:</b>\n\n");
+        for denial in &permission_denials {
+            let detail = denial.tool_input.get("file_path")
+                .and_then(|p| p.as_str())
+                .or_else(|| denial.tool_input.get("command").and_then(|c| c.as_str()))
+                .unwrap_or("(detay tool_input'ta)");
+            denial_text.push_str(&format!("<code>{}</code>: {}\n", denial.tool_name, detail));
+        }
+
+        let keyboard = serde_json::json!({
+            "inline_keyboard": [[
+                {"text": "Onayla", "callback_data": format!("perm_approve:{}", effective_thread_id)},
+                {"text": "Reddet", "callback_data": format!("perm_deny:{}", effective_thread_id)}
+            ]]
+        });
+
+        let kb_msg_id = send_message_with_keyboard(
+            client, bot_token, chat_id, effective_thread_id, &denial_text, keyboard,
+        ).await.ok();
+
+        // Set up approval channel
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        {
+            let mut sessions_guard = sessions.lock().await;
+            if let Some(session) = sessions_guard.get_mut(&effective_thread_id) {
+                session.pending_approval = Some(tx);
+            }
+        }
+
+        // Wait for approval with 60s timeout
+        let approved = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            rx,
+        ).await.unwrap_or(Ok(false)).unwrap_or(false);
+
+        // Remove keyboard buttons
+        if let Some(msg_id) = kb_msg_id {
+            remove_keyboard(client, bot_token, chat_id, msg_id).await;
+        }
+
+        if approved {
+            let session_data = {
+                let sessions_guard = sessions.lock().await;
+                sessions_guard.get(&effective_thread_id).map(|s| (
+                    s.claude_session_id.clone(),
+                    s.workdir.clone(),
+                ))
+            };
+
+            if let Some((Some(sid), workdir)) = session_data {
+                // Start typing indicator for retry
+                let typing_client = client.clone();
+                let typing_token = bot_token.to_string();
+                let typing_chat = chat_id.to_string();
+                let typing_handle = tokio::spawn(async move {
+                    loop {
+                        let _ = send_typing(
+                            &typing_client,
+                            &typing_token,
+                            &typing_chat,
+                            Some(effective_thread_id),
+                        ).await;
+                        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    }
+                });
+
+                let (text_tx, text_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+                // Spawn streaming update handler for retry
+                let stream_client = client.clone();
+                let stream_token = bot_token.to_string();
+                let stream_chat = chat_id.to_string();
+                let stream_handle = tokio::spawn(async move {
+                    handle_streaming_updates(
+                        &stream_client,
+                        &stream_token,
+                        &stream_chat,
+                        effective_thread_id,
+                        text_rx,
+                    ).await
+                });
+
+                let retry_result = claude::run_resume_streaming(
+                    config,
+                    "Please proceed with the previously denied tool calls.",
+                    &sid,
+                    &workdir,
+                    600,
+                    true, // force_bypass
+                    text_tx,
+                ).await;
+
+                typing_handle.abort();
+                let retry_msg_ids = stream_handle.await.unwrap_or_default();
+
+                match retry_result {
+                    Ok(result) => {
+                        // Store updated session_id
+                        if let Some(ref new_sid) = result.claude_session_id {
+                            let mut map = sessions.lock().await;
+                            if let Some(session) = map.get_mut(&effective_thread_id) {
+                                session.claude_session_id = Some(new_sid.clone());
+                            }
+                        }
+                        let text = result.result.unwrap_or_else(|| "Done.".to_string());
+                        let chunks = markdown::split_and_convert(&text);
+                        for (i, chunk) in chunks.iter().enumerate() {
+                            if i < retry_msg_ids.len() {
+                                let _ = edit_message(client, bot_token, chat_id, retry_msg_ids[i], chunk).await;
+                            } else {
+                                let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), chunk).await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id),
+                            &format!("Hata: {:?}", e)).await;
+                    }
+                }
+            }
+        } else {
+            let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id),
+                "Permission denied.").await;
         }
     }
 }
@@ -775,7 +913,7 @@ async fn handle_topic_message(
     config: &Config,
     sessions: &SessionMap,
     text_tx: tokio::sync::mpsc::UnboundedSender<String>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<claude::ClaudeResult> {
     // Get or create session + acquire per-topic lock
     let topic_lock = {
         let mut map = sessions.lock().await;
@@ -827,17 +965,11 @@ async fn handle_topic_message(
             } else {
                 tracing::warn!(thread_id, "Claude returned no session_id");
             }
-            Ok(result
-                .result
-                .unwrap_or_else(|| "No response from Claude.".to_string()))
+            Ok(result)
         }
         Err(e) => {
             let err_msg = e.body.error;
-            if err_msg.contains("timed out") {
-                Ok("Claude did not respond in time. Try again.".to_string())
-            } else {
-                Ok(format!("Claude error: {err_msg}"))
-            }
+            anyhow::bail!("{err_msg}")
         }
     }
 }
