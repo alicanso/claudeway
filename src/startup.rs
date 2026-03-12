@@ -39,7 +39,6 @@ const PLUGINS: &[PluginDef] = &[
         description: "Forward events to a Telegram chat",
         config_fields: &[
             ("bot_token", "Bot token (from @BotFather)", true),
-            ("chat_id", "Chat ID", true),
         ],
     },
     PluginDef {
@@ -135,6 +134,22 @@ pub fn interactive_setup(config: &Config) -> Option<Vec<String>> {
         }
 
         if !skip {
+            // Special handling: auto-detect Telegram chat_id
+            if plugin.name == "telegram" {
+                if let Some(bot_token) = fields.get("bot_token") {
+                    match detect_telegram_chat_id(bot_token) {
+                        Some(chat_id) => {
+                            fields.insert("chat_id", chat_id);
+                        }
+                        None => {
+                            eprintln!(
+                                "  \x1b[33m⚠\x1b[0m Could not detect chat ID, skipping telegram"
+                            );
+                            continue;
+                        }
+                    }
+                }
+            }
             plugin_configs.insert(plugin.name, fields);
         }
     }
@@ -294,6 +309,55 @@ fn checkbox_select_fallback() -> Option<Vec<usize>> {
     }
 
     Some(selected)
+}
+
+/// Auto-detect Telegram chat ID by polling /getUpdates.
+/// Asks user to send a message to the bot, then fetches the chat_id.
+fn detect_telegram_chat_id(bot_token: &str) -> Option<String> {
+    eprintln!();
+    eprintln!(
+        "  \x1b[1;33m→\x1b[0m Send any message to your bot in Telegram, then press \x1b[1mEnter\x1b[0m"
+    );
+    eprint!("    \x1b[2mWaiting...\x1b[0m ");
+    io::stderr().flush().ok();
+
+    // Wait for user to press Enter
+    let mut input = String::new();
+    let _ = io::stdin().read_line(&mut input);
+
+    // Call Telegram getUpdates API (blocking)
+    let url = format!(
+        "https://api.telegram.org/bot{}/getUpdates?limit=1&offset=-1",
+        bot_token
+    );
+
+    let response = match reqwest::blocking::get(&url) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  \x1b[31m✗\x1b[0m Failed to reach Telegram API: {e}");
+            return None;
+        }
+    };
+
+    let body: serde_json::Value = match response.json() {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("  \x1b[31m✗\x1b[0m Invalid response from Telegram: {e}");
+            return None;
+        }
+    };
+
+    if let Some(chat_id) = body["result"][0]["message"]["chat"]["id"].as_i64() {
+        let chat_id_str = chat_id.to_string();
+        eprintln!(
+            "  \x1b[32m✓\x1b[0m Detected chat ID: \x1b[1m{}\x1b[0m",
+            chat_id_str
+        );
+        Some(chat_id_str)
+    } else {
+        eprintln!("  \x1b[31m✗\x1b[0m No messages found. Make sure you sent a message to the bot.");
+        None
+    }
 }
 
 /// Render the checkbox list
