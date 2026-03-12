@@ -305,26 +305,6 @@ async fn handle_message(
         Some((tid, "active")) => (tid, std::borrow::Cow::Borrowed(prompt)),
         // Thread exists but no session (e.g. General topic) or no thread at all — start repo selection
         _ => {
-            let repos = match repos::discover_repos().await {
-                Ok(r) if r.is_empty() => {
-                    let _ = send_message(client, bot_token, chat_id, thread_id, "No repositories found.")
-                        .await;
-                    return;
-                }
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = send_message(
-                        client,
-                        bot_token,
-                        chat_id,
-                        thread_id,
-                        &format!("Failed to list repos: {e}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
             // Reuse existing topic if message came from one, otherwise create new
             let tid = if let Some(existing_tid) = thread_id {
                 existing_tid
@@ -346,26 +326,64 @@ async fn handle_message(
                 }
             };
 
-            // Send repo list
-            let (msg, _) = repos::format_repo_page(&repos, 0, 20);
-            let _ = send_message(client, bot_token, chat_id, Some(tid), &msg).await;
-
-            // Store state
+            // Reserve session BEFORE discover_repos to prevent race conditions
+            // (another message arriving during discovery would see "awaiting" state)
             {
                 let mut map = sessions.lock().await;
                 map.insert(
                     tid,
                     SessionInfo {
                         claude_session_id: None,
-                        workdir: PathBuf::new(), // placeholder until repo selected
+                        workdir: PathBuf::new(),
                         lock: Arc::new(tokio::sync::Mutex::new(())),
                         state: TopicState::AwaitingRepoSelection {
                             pending_prompt: prompt.to_string(),
-                            repos,
+                            repos: Vec::new(), // placeholder until discovery completes
                             page: 0,
                         },
                     },
                 );
+            }
+
+            let repos = match repos::discover_repos().await {
+                Ok(r) if r.is_empty() => {
+                    let _ = send_message(client, bot_token, chat_id, Some(tid), "No repositories found.")
+                        .await;
+                    // Clean up placeholder session
+                    let mut map = sessions.lock().await;
+                    map.remove(&tid);
+                    return;
+                }
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = send_message(
+                        client,
+                        bot_token,
+                        chat_id,
+                        Some(tid),
+                        &format!("Failed to list repos: {e}"),
+                    )
+                    .await;
+                    let mut map = sessions.lock().await;
+                    map.remove(&tid);
+                    return;
+                }
+            };
+
+            // Send repo list
+            let (msg, _) = repos::format_repo_page(&repos, 0, 20);
+            let _ = send_message(client, bot_token, chat_id, Some(tid), &msg).await;
+
+            // Update session with discovered repos
+            {
+                let mut map = sessions.lock().await;
+                if let Some(session) = map.get_mut(&tid) {
+                    session.state = TopicState::AwaitingRepoSelection {
+                        pending_prompt: prompt.to_string(),
+                        repos,
+                        page: 0,
+                    };
+                }
             }
             return; // Don't proceed to Claude yet
         }
@@ -527,6 +545,26 @@ async fn handle_repo_selection(
             }
         }
         return None;
+    }
+
+    // Check if repos are still loading
+    {
+        let map = sessions.lock().await;
+        if let Some(session) = map.get(&thread_id) {
+            if let TopicState::AwaitingRepoSelection { repos, .. } = &session.state {
+                if repos.is_empty() {
+                    let _ = send_message(
+                        client,
+                        bot_token,
+                        chat_id,
+                        Some(thread_id),
+                        "Still loading repositories, please wait...",
+                    )
+                    .await;
+                    return None;
+                }
+            }
+        }
     }
 
     // Parse number selection
