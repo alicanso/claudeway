@@ -139,12 +139,39 @@ async fn main() -> anyhow::Result<()> {
         }))
         .layer(Extension(request_counter.clone()))
         .layer(Extension(config.clone()))
-        .layer(Extension(store))
-        .layer(Extension(logger));
+        .layer(Extension(store.clone()))
+        .layer(Extension(logger.clone()));
 
-    let app = Router::new()
+    #[cfg(feature = "dashboard")]
+    let admin_session_store = Arc::new(admin_auth::AdminSessionStore::new());
+
+    #[cfg(feature = "dashboard")]
+    let admin_routes = {
+        use axum::routing::{get, post};
+        Router::new()
+            .route("/admin/login", post(handlers::admin::login))
+            .route("/admin/overview", get(handlers::admin::overview))
+            .route("/admin/sessions", get(handlers::admin::list_sessions))
+            .route("/admin/sessions/{id}", get(handlers::admin::get_session_detail))
+            .route("/admin/logs", get(handlers::admin::get_logs))
+            .route("/admin/keys", get(handlers::admin::get_keys))
+            .route("/admin/costs", get(handlers::admin::get_costs))
+            .layer(Extension(config.clone()))
+            .layer(Extension(admin_session_store.clone()))
+            .layer(Extension(start_time.clone()))
+            .layer(Extension(request_counter.clone()))
+            .layer(Extension(store.clone()))
+            .layer(Extension(logger.clone()))
+    };
+
+    let mut app = Router::new()
         .merge(public_routes)
         .merge(protected_routes);
+
+    #[cfg(feature = "dashboard")]
+    {
+        app = app.merge(admin_routes);
+    }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
