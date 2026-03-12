@@ -32,6 +32,17 @@ struct GetUpdatesResponse {
     result: Vec<TelegramUpdate>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct CreateForumTopicResponse {
+    ok: bool,
+    result: ForumTopicResult,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ForumTopicResult {
+    message_thread_id: i64,
+}
+
 pub struct SessionInfo {
     pub claude_session_id: Option<String>,
     pub workdir: PathBuf,
@@ -76,6 +87,48 @@ async fn send_typing(
     if let Some(tid) = thread_id {
         body["message_thread_id"] = serde_json::json!(tid);
     }
+    client.post(&url).json(&body).send().await?;
+    Ok(())
+}
+
+/// Create a Forum Topic in the chat. Returns the new thread ID.
+async fn create_forum_topic(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    name: &str,
+) -> anyhow::Result<i64> {
+    let url = format!("https://api.telegram.org/bot{bot_token}/createForumTopic");
+    // Telegram allows 1-128 chars for topic name
+    let truncated = if name.len() > 128 {
+        format!("{}...", &name[..125])
+    } else {
+        name.to_string()
+    };
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "name": truncated,
+    });
+    let response = client.post(&url).json(&body).send().await?;
+    let parsed: CreateForumTopicResponse = response.json().await?;
+    if !parsed.ok {
+        anyhow::bail!("createForumTopic returned ok=false");
+    }
+    Ok(parsed.result.message_thread_id)
+}
+
+/// Delete a Forum Topic from the chat.
+async fn delete_forum_topic(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    thread_id: i64,
+) -> anyhow::Result<()> {
+    let url = format!("https://api.telegram.org/bot{bot_token}/deleteForumTopic");
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_thread_id": thread_id,
+    });
     client.post(&url).json(&body).send().await?;
     Ok(())
 }
@@ -166,26 +219,61 @@ async fn handle_message(
     chat_id: &str,
     thread_id: Option<i64>,
     prompt: &str,
-    update_id: i64,
+    _update_id: i64,
     config: &Config,
     sessions: &SessionMap,
 ) {
+    // Determine the topic thread_id — create a new topic if none
+    let effective_thread_id = if let Some(tid) = thread_id {
+        tid
+    } else {
+        // Create a new Forum Topic named after the first 50 chars of the message
+        let topic_name = if prompt.len() > 50 {
+            format!("{}...", &prompt[..50])
+        } else {
+            prompt.to_string()
+        };
+        match create_forum_topic(client, bot_token, chat_id, &topic_name).await {
+            Ok(tid) => {
+                tracing::info!("created forum topic {tid} for new message");
+                tid
+            }
+            Err(e) => {
+                tracing::error!("failed to create forum topic: {e}");
+                // Send error to main chat as fallback
+                let _ = send_message(client, bot_token, chat_id, None, &format!("Failed to create topic: {e}")).await;
+                return;
+            }
+        }
+    };
+
+    // Handle /close command — delete topic and remove session
+    if prompt.trim() == "/close" {
+        {
+            let mut map = sessions.lock().await;
+            map.remove(&effective_thread_id);
+        }
+        let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), "Session closed.").await;
+        // Small delay so the message is visible before topic is deleted
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if let Err(e) = delete_forum_topic(client, bot_token, chat_id, effective_thread_id).await {
+            tracing::error!("failed to delete forum topic: {e}");
+        }
+        return;
+    }
+
     // Start typing indicator refresh (every 4s)
     let typing_client = client.clone();
     let typing_token = bot_token.to_string();
     let typing_chat = chat_id.to_string();
     let typing_handle = tokio::spawn(async move {
         loop {
-            let _ = send_typing(&typing_client, &typing_token, &typing_chat, thread_id).await;
+            let _ = send_typing(&typing_client, &typing_token, &typing_chat, Some(effective_thread_id)).await;
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
         }
     });
 
-    let result = if let Some(tid) = thread_id {
-        handle_topic_message(prompt, tid, config, sessions).await
-    } else {
-        handle_standalone_message(prompt, update_id, config).await
-    };
+    let result = handle_topic_message(prompt, effective_thread_id, config, sessions).await;
 
     // Stop typing indicator
     typing_handle.abort();
@@ -197,7 +285,7 @@ async fn handle_message(
 
     let chunks = markdown::split_and_convert(&response_text);
     for chunk in chunks {
-        if let Err(e) = send_message(client, bot_token, chat_id, thread_id, &chunk).await {
+        if let Err(e) = send_message(client, bot_token, chat_id, Some(effective_thread_id), &chunk).await {
             tracing::error!("failed to send telegram message: {e}");
         }
     }
@@ -268,29 +356,3 @@ async fn handle_topic_message(
     }
 }
 
-async fn handle_standalone_message(
-    prompt: &str,
-    update_id: i64,
-    config: &Config,
-) -> anyhow::Result<String> {
-    let workdir = PathBuf::from(&config.claude_workdir)
-        .join("telegram")
-        .join("standalone")
-        .join(update_id.to_string());
-
-    tokio::fs::create_dir_all(&workdir).await?;
-
-    match claude::run_task(config, prompt, None, None, &workdir, 600).await {
-        Ok(result) => Ok(result
-            .result
-            .unwrap_or_else(|| "No response from Claude.".to_string())),
-        Err(e) => {
-            let err_msg = e.body.error;
-            if err_msg.contains("timed out") {
-                Ok("Claude did not respond in time. Try again.".to_string())
-            } else {
-                Ok(format!("Claude error: {err_msg}"))
-            }
-        }
-    }
-}
