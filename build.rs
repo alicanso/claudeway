@@ -5,6 +5,7 @@ fn main() {
 
     if !dashboard_dir.join("package.json").exists() {
         println!("cargo:warning=Dashboard source not found at dashboard/. Skipping frontend build.");
+        ensure_dist_dir(dashboard_dir);
         return;
     }
 
@@ -37,6 +38,7 @@ fn main() {
         Ok(s) => s,
         Err(_) => {
             println!("cargo:warning=npm not found, skipping dashboard build.");
+            ensure_dist_dir(dashboard_dir);
             return;
         }
     };
@@ -53,6 +55,7 @@ fn main() {
         Ok(s) => s,
         Err(_) => {
             println!("cargo:warning=npm not found, skipping dashboard build.");
+            ensure_dist_dir(dashboard_dir);
             return;
         }
     };
@@ -64,6 +67,14 @@ fn main() {
     println!("cargo:rerun-if-changed=dashboard/src");
     println!("cargo:rerun-if-changed=dashboard/package.json");
     println!("cargo:rerun-if-changed=dashboard/vite.config.ts");
+}
+
+/// Ensure dashboard/dist/ exists so that #[derive(Embed)] doesn't fail at compile time.
+fn ensure_dist_dir(dashboard_dir: &std::path::Path) {
+    let dist = dashboard_dir.join("dist");
+    if !dist.exists() {
+        let _ = std::fs::create_dir_all(&dist);
+    }
 }
 
 fn walkdir(dir: &std::path::Path) -> Option<std::time::SystemTime> {
