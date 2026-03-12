@@ -80,6 +80,7 @@ async fn run_claude(
         tokio::process::Command::new(&config.claude_bin)
             .args(args)
             .current_dir(workdir)
+            .env_remove("CLAUDECODE")
             .output(),
     )
     .await
@@ -192,13 +193,23 @@ async fn run_claude_streaming(
     let mut child = tokio::process::Command::new(&config.claude_bin)
         .args(args)
         .current_dir(workdir)
+        .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| ApiError::internal(format!("Failed to spawn claude: {e}")))?;
 
     let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
     let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    // Log stderr in background
+    tokio::spawn(async move {
+        let mut stderr_reader = tokio::io::BufReader::new(stderr).lines();
+        while let Some(line) = stderr_reader.next_line().await.unwrap_or(None) {
+            tracing::warn!(target: "claude_stderr", "{}", line);
+        }
+    });
 
     let mut accumulated_text = String::new();
     let mut session_id: Option<String> = None;
@@ -217,6 +228,9 @@ async fn run_claude_streaming(
                 let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
+
+                let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+                tracing::debug!(event_type, "claude stream event");
 
                 match event.get("type").and_then(|t| t.as_str()) {
                     Some("stream_event") => {
