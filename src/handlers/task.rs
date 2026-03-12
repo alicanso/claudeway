@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::error::{ApiError, AppError};
 use crate::logging::{ClaudeInvocationLog, KeyLogger};
 use crate::models::{TaskRequest, TaskResponse};
+use crate::plugin::{GatewayEvent, PluginContext};
 
 const DEFAULT_TIMEOUT: u64 = 120;
 
@@ -36,6 +37,7 @@ pub async fn create_task(
     Extension(request_counter): Extension<Arc<AtomicU64>>,
     Extension(config): Extension<Arc<Config>>,
     Extension(logger): Extension<Arc<KeyLogger>>,
+    Extension(plugin_ctx): Extension<PluginContext>,
     Json(req): Json<TaskRequest>,
 ) -> Result<Json<TaskResponse>, AppError> {
     request_counter.fetch_add(1, Ordering::Relaxed);
@@ -95,6 +97,15 @@ pub async fn create_task(
         ),
     };
     logger.log_claude_invocation(&log_entry);
+
+    // Emit cost event
+    if let Some(cost) = claude_result.cost_usd {
+        plugin_ctx.emit(GatewayEvent::CostRecorded {
+            key_id: key_id.0.clone(),
+            model: req.model.clone().unwrap_or_else(|| "unknown".to_string()),
+            cost,
+        });
+    }
 
     // 7. Return TaskResponse with all fields populated
     let error = if claude_result.success {

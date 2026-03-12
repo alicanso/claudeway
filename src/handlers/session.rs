@@ -15,6 +15,7 @@ use crate::models::{
     DeleteSessionResponse, SessionContinueRequest, SessionInfoResponse, SessionStartRequest,
     SessionStartResponse, TaskResponse, TokenUsage,
 };
+use crate::plugin::{GatewayEvent, PluginContext};
 use crate::session::{SessionMeta, SessionStore};
 
 #[utoipa::path(
@@ -35,6 +36,7 @@ pub async fn start_session(
     Extension(key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,
     Extension(store): Extension<Arc<SessionStore>>,
+    Extension(plugin_ctx): Extension<PluginContext>,
     Json(req): Json<SessionStartRequest>,
 ) -> Result<Json<SessionStartResponse>, crate::error::AppError> {
     let session_id = Uuid::new_v4();
@@ -52,6 +54,9 @@ pub async fn start_session(
     tokio::fs::create_dir_all(&workdir)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to create workdir: {}", e)))?;
+
+    // Clone model before moving into SessionMeta
+    let model_name = req.model.clone().unwrap_or_else(|| "default".to_string());
 
     // Create SessionMeta
     let meta = SessionMeta {
@@ -71,6 +76,13 @@ pub async fn start_session(
 
     // Insert into store
     store.insert(meta);
+
+    // Emit session started event
+    plugin_ctx.emit(GatewayEvent::SessionStarted {
+        session_id: session_id.to_string(),
+        model: model_name,
+        key_id: key_id.0.clone(),
+    });
 
     Ok(Json(SessionStartResponse {
         session_id: session_id.to_string(),
@@ -102,6 +114,7 @@ pub async fn continue_session(
     Extension(config): Extension<Arc<Config>>,
     Extension(store): Extension<Arc<SessionStore>>,
     Extension(logger): Extension<Arc<crate::logging::KeyLogger>>,
+    Extension(plugin_ctx): Extension<PluginContext>,
     Path(id): Path<String>,
     Json(req): Json<SessionContinueRequest>,
 ) -> Result<Json<TaskResponse>, crate::error::AppError> {
@@ -175,6 +188,10 @@ pub async fn continue_session(
         }
     });
 
+    // Save values for event emission before moving into log entry
+    let event_key_id = key_id.0.clone();
+    let event_model = session.model.clone().unwrap_or_else(|| "unknown".to_string());
+
     // Log the invocation
     let log_entry = ClaudeInvocationLog {
         timestamp: Utc::now().to_rfc3339(),
@@ -190,6 +207,21 @@ pub async fn continue_session(
         message: format!("Claude invocation for session {}", session_id),
     };
     logger.log_claude_invocation(&log_entry);
+
+    // Emit events
+    if let Some(ref tokens) = claude_result.tokens {
+        plugin_ctx.emit(GatewayEvent::SessionCompleted {
+            session_id: session_id.to_string(),
+            token_usage: tokens.clone(),
+        });
+    }
+    if let Some(cost) = claude_result.cost_usd {
+        plugin_ctx.emit(GatewayEvent::CostRecorded {
+            key_id: event_key_id,
+            model: event_model,
+            cost,
+        });
+    }
 
     Ok(Json(TaskResponse {
         session_id: session_id.to_string(),
@@ -263,6 +295,7 @@ pub async fn get_session(
 )]
 pub async fn delete_session(
     Extension(store): Extension<Arc<SessionStore>>,
+    Extension(plugin_ctx): Extension<PluginContext>,
     Path(id): Path<String>,
 ) -> Result<Json<DeleteSessionResponse>, crate::error::AppError> {
     // Parse UUID from path
@@ -278,6 +311,11 @@ pub async fn delete_session(
     if session.auto_workdir {
         let _ = tokio::fs::remove_dir_all(&session.workdir).await;
     }
+
+    // Emit session deleted event
+    plugin_ctx.emit(GatewayEvent::SessionDeleted {
+        session_id: session_id.to_string(),
+    });
 
     Ok(Json(DeleteSessionResponse {
         deleted: true,
