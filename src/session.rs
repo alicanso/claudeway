@@ -21,6 +21,7 @@ pub struct SessionMeta {
     pub task_count: u32,
     pub tokens: TokenUsage,
     pub cost_usd: f64,
+    pub key_id: String,
 }
 
 /// Thread-safe session store using DashMap with per-session mutexes
@@ -66,6 +67,11 @@ impl SessionStore {
         self.sessions.remove(id).map(|(_, meta)| meta)
     }
 
+    /// List all session metadata entries
+    pub fn list_all(&self) -> Vec<SessionMeta> {
+        self.sessions.iter().map(|entry| entry.value().clone()).collect()
+    }
+
     /// Get the lock for a session
     pub fn get_lock(&self, id: &Uuid) -> Option<Arc<Mutex<()>>> {
         self.locks.get(id).map(|entry| Arc::clone(&entry))
@@ -101,6 +107,7 @@ mod tests {
             task_count: 0,
             tokens: TokenUsage::default(),
             cost_usd: 0.0,
+            key_id: "test".to_string(),
         };
 
         // Insert
@@ -152,6 +159,7 @@ mod tests {
             task_count: 0,
             tokens: TokenUsage::default(),
             cost_usd: 0.0,
+            key_id: "test".to_string(),
         };
 
         // Insert
@@ -167,5 +175,54 @@ mod tests {
         // Verify get_lock returns None
         let lock = store.get_lock(&session_id);
         assert!(lock.is_none());
+    }
+
+    #[test]
+    fn test_session_stores_key_id() {
+        let store = SessionStore::new();
+        let session_id = Uuid::new_v4();
+        let now = Utc::now();
+        let meta = SessionMeta {
+            session_id,
+            claude_session_id: None,
+            created_at: now,
+            last_used: now,
+            model: None,
+            system_prompt: None,
+            workdir: PathBuf::from("/tmp"),
+            auto_workdir: false,
+            task_count: 0,
+            tokens: TokenUsage::default(),
+            cost_usd: 0.0,
+            key_id: "admin".to_string(),
+        };
+        store.insert(meta);
+        let retrieved = store.get(&session_id).unwrap();
+        assert_eq!(retrieved.key_id, "admin");
+    }
+
+    #[test]
+    fn test_list_all_sessions() {
+        let store = SessionStore::new();
+        let now = Utc::now();
+        for i in 0..3 {
+            let meta = SessionMeta {
+                session_id: Uuid::new_v4(),
+                claude_session_id: None,
+                created_at: now,
+                last_used: now,
+                model: Some("sonnet".to_string()),
+                system_prompt: None,
+                workdir: PathBuf::from("/tmp"),
+                auto_workdir: false,
+                task_count: i,
+                tokens: TokenUsage::default(),
+                cost_usd: 0.0,
+                key_id: "admin".to_string(),
+            };
+            store.insert(meta);
+        }
+        let all = store.list_all();
+        assert_eq!(all.len(), 3);
     }
 }

@@ -31,7 +31,7 @@ use crate::session::{SessionMeta, SessionStore};
     )
 )]
 pub async fn start_session(
-    Extension(_key_id): Extension<KeyId>,
+    Extension(key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,
     Extension(store): Extension<Arc<SessionStore>>,
     Json(req): Json<SessionStartRequest>,
@@ -65,6 +65,7 @@ pub async fn start_session(
         task_count: 0,
         tokens: TokenUsage::default(),
         cost_usd: 0.0,
+        key_id: key_id.0.clone(),
     };
 
     // Insert into store
