@@ -184,6 +184,8 @@ async fn main() -> anyhow::Result<()> {
     );
     eprintln!("Keys loaded: {:?}", config.key_ids());
 
+    plugin_ctx.emit(plugin::GatewayEvent::ServerStarted { port: config.port });
+
     axum::serve(listener, app).await?;
     Ok(())
 }
