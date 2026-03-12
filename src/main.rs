@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 mod auth;
+mod claude;
 mod config;
 mod error;
 mod models;
