@@ -276,87 +276,114 @@ async fn handle_message(
     projects_dir: &std::path::Path,
 ) {
     // Determine the topic thread_id — handle repo selection flow
-    let (effective_thread_id, prompt) = if let Some(tid) = thread_id {
-        // Check if this topic is awaiting repo selection
-        let is_awaiting = {
-            let map = sessions.lock().await;
-            map.get(&tid)
-                .map_or(false, |s| matches!(s.state, TopicState::AwaitingRepoSelection { .. }))
-        };
+    // Check session state for existing thread_ids
+    let session_state = if let Some(tid) = thread_id {
+        let map = sessions.lock().await;
+        match map.get(&tid) {
+            Some(s) if matches!(s.state, TopicState::AwaitingRepoSelection { .. }) => {
+                Some((tid, "awaiting"))
+            }
+            Some(_) => Some((tid, "active")),
+            None => Some((tid, "new")), // thread exists but no session (e.g. General topic)
+        }
+    } else {
+        None // no thread_id at all
+    };
 
-        if is_awaiting {
+    let (effective_thread_id, prompt) = match session_state {
+        // Existing session awaiting repo selection
+        Some((tid, "awaiting")) => {
             if let Some(pending_prompt) =
                 handle_repo_selection(client, bot_token, chat_id, tid, prompt, sessions, projects_dir).await
             {
-                // Repo selected — continue with the pending prompt
                 (tid, std::borrow::Cow::Owned(pending_prompt))
             } else {
                 return;
             }
-        } else {
-            (tid, std::borrow::Cow::Borrowed(prompt))
         }
-    } else {
-        // New message — start repo selection flow
-        let repos = match repos::discover_repos().await {
-            Ok(r) if r.is_empty() => {
-                let _ = send_message(client, bot_token, chat_id, None, "No repositories found.")
+        // Existing active session — pass through to Claude
+        Some((tid, "active")) => (tid, std::borrow::Cow::Borrowed(prompt)),
+        // Thread exists but no session (e.g. General topic) or no thread at all — start repo selection
+        _ => {
+            let repos = match repos::discover_repos().await {
+                Ok(r) if r.is_empty() => {
+                    let _ = send_message(client, bot_token, chat_id, thread_id, "No repositories found.")
+                        .await;
+                    return;
+                }
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = send_message(
+                        client,
+                        bot_token,
+                        chat_id,
+                        thread_id,
+                        &format!("Failed to list repos: {e}"),
+                    )
                     .await;
-                return;
-            }
-            Ok(r) => r,
-            Err(e) => {
-                let _ = send_message(
-                    client,
-                    bot_token,
-                    chat_id,
-                    None,
-                    &format!("Failed to list repos: {e}"),
-                )
-                .await;
-                return;
-            }
-        };
+                    return;
+                }
+            };
 
-        // Create topic for this session
-        let topic_name = "Selecting repo...";
-        let tid = match create_forum_topic(client, bot_token, chat_id, topic_name).await {
-            Ok(tid) => tid,
-            Err(e) => {
-                let _ = send_message(
-                    client,
-                    bot_token,
-                    chat_id,
-                    None,
-                    &format!("Failed to create topic: {e}"),
-                )
-                .await;
-                return;
-            }
-        };
+            // Create a new topic (or reuse existing thread for General-topic messages)
+            let tid = if let Some(existing_tid) = thread_id {
+                // Message came from an existing topic (e.g. General) — create a new topic anyway
+                let topic_name = "Selecting repo...";
+                match create_forum_topic(client, bot_token, chat_id, topic_name).await {
+                    Ok(tid) => tid,
+                    Err(e) => {
+                        let _ = send_message(
+                            client,
+                            bot_token,
+                            chat_id,
+                            Some(existing_tid),
+                            &format!("Failed to create topic: {e}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            } else {
+                let topic_name = "Selecting repo...";
+                match create_forum_topic(client, bot_token, chat_id, topic_name).await {
+                    Ok(tid) => tid,
+                    Err(e) => {
+                        let _ = send_message(
+                            client,
+                            bot_token,
+                            chat_id,
+                            None,
+                            &format!("Failed to create topic: {e}"),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            };
 
-        // Send repo list
-        let (msg, _) = repos::format_repo_page(&repos, 0, 20);
-        let _ = send_message(client, bot_token, chat_id, Some(tid), &msg).await;
+            // Send repo list
+            let (msg, _) = repos::format_repo_page(&repos, 0, 20);
+            let _ = send_message(client, bot_token, chat_id, Some(tid), &msg).await;
 
-        // Store state
-        {
-            let mut map = sessions.lock().await;
-            map.insert(
-                tid,
-                SessionInfo {
-                    claude_session_id: None,
-                    workdir: PathBuf::new(), // placeholder until repo selected
-                    lock: Arc::new(tokio::sync::Mutex::new(())),
-                    state: TopicState::AwaitingRepoSelection {
-                        pending_prompt: prompt.to_string(),
-                        repos,
-                        page: 0,
+            // Store state
+            {
+                let mut map = sessions.lock().await;
+                map.insert(
+                    tid,
+                    SessionInfo {
+                        claude_session_id: None,
+                        workdir: PathBuf::new(), // placeholder until repo selected
+                        lock: Arc::new(tokio::sync::Mutex::new(())),
+                        state: TopicState::AwaitingRepoSelection {
+                            pending_prompt: prompt.to_string(),
+                            repos,
+                            page: 0,
+                        },
                     },
-                },
-            );
+                );
+            }
+            return; // Don't proceed to Claude yet
         }
-        return; // Don't proceed to Claude yet
     };
 
     let prompt = &*prompt;
