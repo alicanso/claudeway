@@ -85,6 +85,11 @@ impl Plugin for CloudflareTunnelPlugin {
                                         while let Ok(Some(line)) = lines.next_line().await {
                                             if let Some(url) = extract_tunnel_url(&line) {
                                                 tracing::info!("cloudflare tunnel URL: {url}");
+                                                eprintln!(
+                                                    "  \x1b[1;32m→\x1b[0m Tunnel    \x1b[1m{}\x1b[0m",
+                                                    url
+                                                );
+                                                eprintln!();
                                             }
                                             tracing::debug!(target: "cloudflared", "{}", line);
                                         }
