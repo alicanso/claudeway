@@ -29,21 +29,33 @@ fn main() {
         }
     }
 
-    let status = Command::new("npm")
+    let status = match Command::new("npm")
         .arg("install")
         .current_dir(dashboard_dir)
         .status()
-        .expect("Failed to run npm install. Is Node.js installed?");
+    {
+        Ok(s) => s,
+        Err(_) => {
+            println!("cargo:warning=npm not found, skipping dashboard build.");
+            return;
+        }
+    };
 
     if !status.success() {
         panic!("npm install failed");
     }
 
-    let status = Command::new("npm")
+    let status = match Command::new("npm")
         .args(["run", "build"])
         .current_dir(dashboard_dir)
         .status()
-        .expect("Failed to run npm run build");
+    {
+        Ok(s) => s,
+        Err(_) => {
+            println!("cargo:warning=npm not found, skipping dashboard build.");
+            return;
+        }
+    };
 
     if !status.success() {
         panic!("npm run build failed");
