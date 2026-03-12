@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::claude;
 use crate::config::Config;
 
@@ -85,6 +87,85 @@ pub struct SessionInfo {
 }
 
 pub type SessionMap = Arc<tokio::sync::Mutex<HashMap<i64, SessionInfo>>>;
+
+/// Serializable subset of SessionInfo for disk persistence.
+#[derive(Serialize, Deserialize)]
+struct PersistedSession {
+    claude_session_id: Option<String>,
+    workdir: PathBuf,
+}
+
+/// Save active sessions to a JSON file. Only persists sessions with Active state.
+async fn save_sessions(sessions: &SessionMap, path: &std::path::Path) {
+    let map = sessions.lock().await;
+    let persisted: HashMap<String, PersistedSession> = map
+        .iter()
+        .filter(|(_, s)| matches!(s.state, TopicState::Active))
+        .map(|(tid, s)| {
+            (
+                tid.to_string(),
+                PersistedSession {
+                    claude_session_id: s.claude_session_id.clone(),
+                    workdir: s.workdir.clone(),
+                },
+            )
+        })
+        .collect();
+    drop(map);
+
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+
+    let tmp = path.with_extension("tmp");
+    match serde_json::to_string_pretty(&persisted) {
+        Ok(json) => {
+            if let Err(e) = tokio::fs::write(&tmp, &json).await {
+                tracing::error!("failed to write sessions file: {e}");
+                return;
+            }
+            if let Err(e) = tokio::fs::rename(&tmp, path).await {
+                tracing::error!("failed to rename sessions file: {e}");
+            }
+        }
+        Err(e) => tracing::error!("failed to serialize sessions: {e}"),
+    }
+}
+
+/// Load persisted sessions from a JSON file into the SessionMap.
+async fn load_sessions(sessions: &SessionMap, path: &std::path::Path) {
+    let data = match tokio::fs::read_to_string(path).await {
+        Ok(d) => d,
+        Err(_) => return, // File doesn't exist yet — first run
+    };
+
+    let persisted: HashMap<String, PersistedSession> = match serde_json::from_str(&data) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("failed to parse sessions file, starting fresh: {e}");
+            return;
+        }
+    };
+
+    let mut map = sessions.lock().await;
+    for (tid_str, ps) in persisted {
+        let Ok(tid) = tid_str.parse::<i64>() else {
+            continue;
+        };
+        map.insert(
+            tid,
+            SessionInfo {
+                claude_session_id: ps.claude_session_id,
+                workdir: ps.workdir,
+                lock: Arc::new(tokio::sync::Mutex::new(())),
+                state: TopicState::Active,
+                pending_approval: None,
+            },
+        );
+    }
+
+    tracing::info!("loaded {} telegram sessions from disk", map.len());
+}
 
 /// Send a text message to a Telegram chat, optionally in a specific thread.
 /// Returns the message_id of the sent message.
@@ -246,6 +327,14 @@ pub async fn run_polling_loop(
     let client = reqwest::Client::new();
     let mut offset: i64 = 0;
 
+    // Persistence file path
+    let sessions_file = PathBuf::from(&config.claude_workdir)
+        .join("telegram")
+        .join("sessions.json");
+
+    // Load persisted sessions from previous runs
+    load_sessions(&sessions, &sessions_file).await;
+
     tracing::info!("telegram polling loop running for chat_id={chat_id}");
 
     loop {
@@ -313,6 +402,7 @@ pub async fn run_polling_loop(
             let sessions = sessions.clone();
             let projects_dir = projects_dir.clone();
 
+            let sessions_file = sessions_file.clone();
             tokio::spawn(async move {
                 handle_message(
                     &client,
@@ -324,6 +414,7 @@ pub async fn run_polling_loop(
                     &config,
                     &sessions,
                     &projects_dir,
+                    &sessions_file,
                 )
                 .await;
             });
@@ -341,6 +432,7 @@ async fn handle_message(
     config: &Config,
     sessions: &SessionMap,
     projects_dir: &std::path::Path,
+    sessions_file: &std::path::Path,
 ) {
     // Determine the topic thread_id — handle repo selection flow
     // Check session state for existing thread_ids
@@ -363,6 +455,7 @@ async fn handle_message(
             if let Some(pending_prompt) =
                 handle_repo_selection(client, bot_token, chat_id, tid, prompt, sessions, projects_dir).await
             {
+                save_sessions(sessions, sessions_file).await;
                 (tid, std::borrow::Cow::Owned(pending_prompt))
             } else {
                 return;
@@ -465,6 +558,7 @@ async fn handle_message(
             let mut map = sessions.lock().await;
             map.remove(&effective_thread_id);
         }
+        save_sessions(sessions, sessions_file).await;
         let _ = send_message(
             client,
             bot_token,
@@ -555,6 +649,9 @@ async fn handle_message(
 
     // Wait for streaming handler to finish, get message IDs it created
     let sent_message_ids = stream_handle.await.unwrap_or_default();
+
+    // Persist sessions after Claude interaction (session_id may have been set)
+    save_sessions(sessions, sessions_file).await;
 
     let (response_text, permission_denials) = match result {
         Ok(claude_result) => {
@@ -696,6 +793,7 @@ async fn handle_message(
                                 session.claude_session_id = Some(new_sid.clone());
                             }
                         }
+                        save_sessions(sessions, sessions_file).await;
                         let text = result.result.unwrap_or_else(|| "Done.".to_string());
                         let chunks = markdown::split_and_convert(&text);
                         for (i, chunk) in chunks.iter().enumerate() {
