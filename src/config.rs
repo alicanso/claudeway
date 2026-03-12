@@ -1,5 +1,35 @@
+use clap::Parser;
+use rand::Rng;
 use std::collections::HashMap;
-use std::env;
+
+/// Claudeway — HTTP gateway for the Claude CLI
+#[derive(Parser, Debug)]
+#[command(name = "claudeway", version, about)]
+struct Cli {
+    /// API keys as key_id:key_value, comma-separated
+    #[arg(long, env = "WRAPPER_KEYS")]
+    keys: Option<String>,
+
+    /// Path to claude CLI binary
+    #[arg(long, env = "CLAUDE_BIN", default_value = "claude")]
+    claude_bin: String,
+
+    /// Base directory for session workdirs
+    #[arg(long, env = "CLAUDE_WORKDIR", default_value = "/tmp/claude-tasks")]
+    workdir: String,
+
+    /// Base directory for per-key log files
+    #[arg(long, env = "LOG_DIR", default_value = "./logs")]
+    log_dir: String,
+
+    /// HTTP listen port
+    #[arg(short, long, env = "PORT", default_value_t = 3000)]
+    port: u16,
+
+    /// Log level (trace, debug, info, warn, error)
+    #[arg(long, env = "LOG_LEVEL", default_value = "info")]
+    log_level: String,
+}
 
 pub struct Config {
     pub api_keys: HashMap<String, String>,
@@ -8,35 +38,32 @@ pub struct Config {
     pub log_dir: String,
     pub port: u16,
     pub log_level: String,
+    /// If a key was auto-generated, this holds the secret so we can print it at startup.
+    pub generated_key: Option<String>,
 }
 
 impl Config {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let keys_raw =
-            env::var("WRAPPER_KEYS").map_err(|_| anyhow::anyhow!("WRAPPER_KEYS is required"))?;
-        let api_keys = Self::parse_keys(&keys_raw)?;
+    pub fn load() -> anyhow::Result<Self> {
+        let cli = Cli::parse();
 
-        let claude_bin = env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
-
-        let claude_workdir =
-            env::var("CLAUDE_WORKDIR").unwrap_or_else(|_| "/tmp/claude-tasks".to_string());
-
-        let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
-
-        let port: u16 = env::var("PORT")
-            .unwrap_or_else(|_| "3000".to_string())
-            .parse()
-            .map_err(|_| anyhow::anyhow!("PORT must be a valid u16"))?;
-
-        let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
+        let (api_keys, generated_key) = match cli.keys {
+            Some(raw) => (Self::parse_keys(&raw)?, None),
+            None => {
+                let secret = generate_secret();
+                let mut map = HashMap::new();
+                map.insert(secret.clone(), "default".to_string());
+                (map, Some(secret))
+            }
+        };
 
         Ok(Self {
             api_keys,
-            claude_bin,
-            claude_workdir,
-            log_dir,
-            port,
-            log_level,
+            claude_bin: cli.claude_bin,
+            claude_workdir: cli.workdir,
+            log_dir: cli.log_dir,
+            port: cli.port,
+            log_level: cli.log_level,
+            generated_key,
         })
     }
 
@@ -79,6 +106,13 @@ impl Config {
     pub fn key_ids(&self) -> Vec<&String> {
         self.api_keys.values().collect()
     }
+}
+
+fn generate_secret() -> String {
+    let mut rng = rand::thread_rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.r#gen()).collect();
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sk-{hex}")
 }
 
 #[cfg(test)]

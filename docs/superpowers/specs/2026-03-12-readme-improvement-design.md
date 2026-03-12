@@ -5,60 +5,44 @@
 The current README has three issues:
 
 1. **Quick Start assumes Rust knowledge** — `cargo run` is the primary path, alienating users who just want to run Claudeway
-2. **Wrapper Keys are confusing** — `WRAPPER_KEYS=admin:sk-your-key` format is not explained; users don't know what key_id vs key_value means or how to generate secure values
+2. **Wrapper Keys are confusing** — `WRAPPER_KEYS=admin:sk-your-key` format is not explained; users don't understand what key_id vs key_value means or how to generate secure values
 3. **Deployment section duplicates Quick Start** — Docker and binary instructions appear in both sections
 
 ## Design
 
-### Quick Start Restructure
+### Code Changes
 
-Replace the current Quick Start with a step-by-step tutorial:
+#### Auto-generated API Key (config.rs)
+When `WRAPPER_KEYS` / `--keys` is not provided, Claudeway generates a random `sk-<64 hex chars>` key with key_id `default` and prints it to stderr on startup. This makes the quickstart zero-config.
 
-#### Step 1: Prerequisites
+#### CLI Arguments (clap)
+All configuration options are available as both CLI flags and environment variables. CLI flags take precedence. Added via `clap` with `derive` and `env` features:
 
-Explain that Claudeway wraps the Claude CLI, so it must be installed first. Link to official Claude CLI docs. Provide install command: `npm install -g @anthropic-ai/claude-code`.
+- `--keys` (env: `WRAPPER_KEYS`) — optional, auto-generates if absent
+- `--claude-bin` (env: `CLAUDE_BIN`)
+- `--workdir` (env: `CLAUDE_WORKDIR`)
+- `--log-dir` (env: `LOG_DIR`)
+- `-p, --port` (env: `PORT`)
+- `--log-level` (env: `LOG_LEVEL`)
 
-#### Step 2: Generate API Keys
+### README Changes
 
-Explain the `key_id:secret` format clearly:
+#### Quick Start
+Step-by-step tutorial:
+1. Install Claude CLI (`npm install -g @anthropic-ai/claude-code`)
+2. Run Claudeway — three equally weighted options: Docker, pre-built binary, from source. No key setup needed.
+3. Verify — health check + models endpoint using the auto-generated key
 
-- **key_id**: A label for audit logs (e.g., `admin`, `ci-bot`). Not a secret.
-- **secret**: The Bearer token used in HTTP requests. Must be kept secret.
+#### Configuration
+Merged table showing both CLI flags and env vars. Separate "API Keys" subsection explaining key_id:secret format with `openssl rand -hex 32` for production use.
 
-Provide `openssl rand -hex 32` as the recommended way to generate a secure secret. Show a concrete example of setting `WRAPPER_KEYS` with one key and with multiple keys.
-
-#### Step 3: Run
-
-Three options, equally weighted:
-
-1. **Docker** (no Rust required) — `docker run` one-liner
-2. **Pre-built binary** (no Rust required) — download from GitHub Releases
-3. **From source** (Rust developers) — `cargo install --git` or `cargo run`
-
-#### Step 4: Verify
-
-Two curl commands: health check (no auth) and models endpoint (with auth). Shows the server is running and auth is working.
-
-### Configuration Table Update
-
-Change `WRAPPER_KEYS` description from `API keys as key_id:key_value, comma-separated` to a clearer description that references the Quick Start section for setup instructions.
-
-### Deployment Section
-
-Remove duplicated Docker/binary instructions. Keep only production-specific details:
-
-- `cargo build --release` optimization note
-- `docker compose` for production deployments
-- Reference Quick Start for basic setup
+#### Deployment
+Trimmed to production-specific details only (release build, docker compose). No duplication with Quick Start.
 
 ### No Changes
-
-These sections remain unchanged:
-
 - Why Claudeway?
 - Performance
-- API Reference
-- Sessions
+- API Reference / Sessions
 - Logging
 - Architecture
 - Error Responses

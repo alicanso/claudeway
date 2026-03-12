@@ -66,7 +66,19 @@ struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::from_env()?;
+    let config = Config::load()?;
+
+    if let Some(ref key) = config.generated_key {
+        eprintln!();
+        eprintln!("  No API keys configured — generated one for you:");
+        eprintln!();
+        eprintln!("    {key}");
+        eprintln!();
+        eprintln!("  Use it as: curl -H \"Authorization: Bearer {key}\" http://localhost:{}/task", config.port);
+        eprintln!("  To set your own keys, use --keys or WRAPPER_KEYS env var.");
+        eprintln!();
+    }
+
     let config = Arc::new(config);
     let start_time = Arc::new(Instant::now());
     let store = Arc::new(SessionStore::new());

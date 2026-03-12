@@ -39,22 +39,66 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 | **Per-key audit logs** | Monthly rotating JSONL files per API key |
 | **Zero-copy performance** | Axum + Tokio + DashMap. No GC pauses. No runtime overhead. |
 | **Type-safe OpenAPI** | Auto-generated OpenAPI 3.1 spec + Swagger UI at `/docs` |
-| **Deploy anywhere** | ~6 MB static binary. Alpine Docker image. One env var to configure. |
+| **Deploy anywhere** | ~6 MB static binary. Alpine Docker image. Zero config to start. |
 
 ## Quick Start
 
-```bash
-# One command. That's it.
-WRAPPER_KEYS=admin:sk-your-key cargo run
-```
+### 1. Install the Claude CLI
+
+Claudeway is an HTTP gateway for the [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli). Install it first:
 
 ```bash
-# Or Docker
-cp .env.example .env
-docker compose up
+npm install -g @anthropic-ai/claude-code
 ```
 
-Server starts in milliseconds. Health check responds in microseconds.
+### 2. Run Claudeway
+
+No configuration required. Claudeway generates an API key for you on startup.
+
+**Docker** (no Rust required):
+
+```bash
+docker run -p 3000:3000 claudeway
+```
+
+**Pre-built binary** (no Rust required):
+
+Download the latest binary from [GitHub Releases](https://github.com/alicanso/claudeway/releases), then:
+
+```bash
+chmod +x claudeway
+./claudeway
+```
+
+**From source** (Rust developers):
+
+```bash
+cargo install --git https://github.com/alicanso/claudeway
+claudeway
+```
+
+On startup you'll see:
+
+```
+  No API keys configured — generated one for you:
+
+    sk-a7f3b2e19c...
+
+  Use it as: curl -H "Authorization: Bearer sk-a7f3b2e19c..." http://localhost:3000/task
+  To set your own keys, use --keys or WRAPPER_KEYS env var.
+
+Claudeway v0.1.0 listening on 0.0.0.0:3000
+```
+
+### 3. Verify
+
+```bash
+# Health check (no auth required)
+curl http://localhost:3000/health
+
+# List models (use the key printed at startup)
+curl -H "Authorization: Bearer sk-a7f3b2e19c..." http://localhost:3000/models
+```
 
 ## Performance
 
@@ -161,19 +205,36 @@ Concurrent requests to the same session are automatically serialized via per-ses
 
 ## Configuration
 
-| Variable | Default | Description |
-|---|---|---|
-| `WRAPPER_KEYS` | *required* | API keys as `key_id:key_value`, comma-separated |
-| `CLAUDE_BIN` | `claude` | Path to claude CLI binary |
-| `CLAUDE_WORKDIR` | `/tmp/claude-tasks` | Base directory for session workdirs |
-| `LOG_DIR` | `./logs` | Base directory for per-key log files |
-| `PORT` | `3000` | HTTP listen port |
-| `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
+Every option can be set via CLI flags, environment variables, or both. CLI flags take precedence.
 
-**Multi-key example:**
+| Flag | Env Variable | Default | Description |
+|---|---|---|---|
+| `--keys` | `WRAPPER_KEYS` | *auto-generated* | API keys as `key_id:secret`, comma-separated |
+| `--claude-bin` | `CLAUDE_BIN` | `claude` | Path to claude CLI binary |
+| `--workdir` | `CLAUDE_WORKDIR` | `/tmp/claude-tasks` | Base directory for session workdirs |
+| `--log-dir` | `LOG_DIR` | `./logs` | Base directory for per-key log files |
+| `-p, --port` | `PORT` | `3000` | HTTP listen port |
+| `--log-level` | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
+
+### API Keys
+
+If you don't provide `--keys` or `WRAPPER_KEYS`, Claudeway generates a single key on startup and prints it to stderr.
+
+For production, define your own keys. Each key has a **key ID** (a label that appears in logs) and a **secret** (the Bearer token used in requests):
 
 ```bash
-WRAPPER_KEYS=admin:sk-prod-key-001,ci-bot:sk-ci-key-002,staging:sk-stg-key-003
+# Generate a secure secret
+openssl rand -hex 32
+
+# Use it
+claudeway --keys "admin:$(openssl rand -hex 32)"
+
+# Multiple keys
+claudeway --keys "admin:sk-prod-key-001,ci-bot:sk-ci-key-002"
+
+# Or via environment variable
+export WRAPPER_KEYS=admin:sk-prod-key-001,ci-bot:sk-ci-key-002
+claudeway
 ```
 
 Each key gets its own log directory, so you always know who did what.
@@ -248,6 +309,20 @@ Every Claude invocation is logged with full detail:
    └─────────────────┘
 ```
 
+## Deployment
+
+For production deployments:
+
+```bash
+# Optimized release build (~6 MB)
+cargo build --release
+# Binary at target/release/claudeway
+
+# Docker Compose
+cp .env.example .env    # edit with your keys
+docker compose up -d
+```
+
 ## Error Responses
 
 Consistent JSON error shape across all endpoints:
@@ -263,20 +338,6 @@ Consistent JSON error shape across all endpoints:
 | `404` | `NOT_FOUND` | Session not found |
 | `408` | `TIMEOUT` | Claude CLI exceeded timeout |
 | `500` | `INTERNAL_ERROR` | Unexpected server error |
-
-## Deployment
-
-**Binary (recommended):**
-```bash
-cargo build --release
-# Binary at target/release/claudeway (~6 MB)
-```
-
-**Docker:**
-```bash
-docker build -t claudeway .
-docker run -e WRAPPER_KEYS=admin:sk-key -p 3000:3000 claudeway
-```
 
 ## License
 
