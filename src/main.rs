@@ -3,6 +3,7 @@ use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
@@ -84,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Arc::new(config);
     let start_time = Arc::new(Instant::now());
+    let request_counter = Arc::new(AtomicU64::new(0));
     let store = Arc::new(SessionStore::new());
     let models_cache = Arc::new(ModelsCache::new());
     let key_ids: Vec<String> = config.key_ids().into_iter().cloned().collect();
@@ -131,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
             let keys = api_keys.clone();
             auth::auth_middleware(req, next, keys)
         }))
+        .layer(Extension(request_counter.clone()))
         .layer(Extension(config.clone()))
         .layer(Extension(store))
         .layer(Extension(logger));

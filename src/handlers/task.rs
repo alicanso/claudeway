@@ -2,6 +2,7 @@ use axum::extract::Extension;
 use axum::Json;
 use chrono::Utc;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -32,10 +33,13 @@ const DEFAULT_TIMEOUT: u64 = 120;
 )]
 pub async fn create_task(
     Extension(key_id): Extension<KeyId>,
+    Extension(request_counter): Extension<Arc<AtomicU64>>,
     Extension(config): Extension<Arc<Config>>,
     Extension(logger): Extension<Arc<KeyLogger>>,
     Json(req): Json<TaskRequest>,
 ) -> Result<Json<TaskResponse>, AppError> {
+    request_counter.fetch_add(1, Ordering::Relaxed);
+
     // 1. Validate prompt is not empty
     if req.prompt.trim().is_empty() {
         return Err(ApiError::bad_request("prompt cannot be empty"));

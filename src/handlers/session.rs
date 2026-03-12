@@ -2,6 +2,7 @@ use axum::extract::{Extension, Path};
 use axum::Json;
 use chrono::Utc;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -97,12 +98,15 @@ pub async fn start_session(
 )]
 pub async fn continue_session(
     Extension(key_id): Extension<KeyId>,
+    Extension(request_counter): Extension<Arc<AtomicU64>>,
     Extension(config): Extension<Arc<Config>>,
     Extension(store): Extension<Arc<SessionStore>>,
     Extension(logger): Extension<Arc<crate::logging::KeyLogger>>,
     Path(id): Path<String>,
     Json(req): Json<SessionContinueRequest>,
 ) -> Result<Json<TaskResponse>, crate::error::AppError> {
+    request_counter.fetch_add(1, Ordering::Relaxed);
+
     // Parse UUID from path
     let session_id = Uuid::parse_str(&id)
         .map_err(|_| ApiError::bad_request("Invalid session ID format"))?;
