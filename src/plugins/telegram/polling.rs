@@ -7,6 +7,7 @@ use crate::claude;
 use crate::config::Config;
 
 use super::markdown;
+use super::repos::{self, RepoInfo};
 
 /// Telegram Update object (subset of fields we care about).
 #[derive(Debug, serde::Deserialize)]
@@ -55,10 +56,21 @@ struct SentMessage {
     message_id: i64,
 }
 
+#[derive(Debug)]
+pub enum TopicState {
+    AwaitingRepoSelection {
+        pending_prompt: String,
+        repos: Vec<RepoInfo>,
+        page: usize,
+    },
+    Active,
+}
+
 pub struct SessionInfo {
     pub claude_session_id: Option<String>,
     pub workdir: PathBuf,
     pub lock: Arc<tokio::sync::Mutex<()>>,
+    pub state: TopicState,
 }
 
 pub type SessionMap = Arc<tokio::sync::Mutex<HashMap<i64, SessionInfo>>>;
@@ -420,6 +432,7 @@ async fn handle_topic_message(
                 claude_session_id: None,
                 workdir,
                 lock: Arc::new(tokio::sync::Mutex::new(())),
+                state: TopicState::Active,
             }
         });
         session.lock.clone()
