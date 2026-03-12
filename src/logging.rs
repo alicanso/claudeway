@@ -1,5 +1,5 @@
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -66,6 +66,10 @@ impl KeyLogger {
         }
     }
 
+    pub fn log_dir(&self) -> &Path {
+        &self.log_dir
+    }
+
     /// Log a request entry
     pub fn log_request(&self, entry: &RequestLog) {
         let key_id = entry
@@ -111,7 +115,7 @@ pub struct RequestLog {
 }
 
 /// Claude invocation log entry
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ClaudeInvocationLog {
     pub timestamp: String,
     pub level: &'static str,
