@@ -3,3 +3,4 @@ logs/
 docs/
 .env
 .vscode/
+.worktrees/
