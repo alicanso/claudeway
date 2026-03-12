@@ -142,6 +142,7 @@ pub async fn run_task_streaming(
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
+        "--include-partial-messages".to_string(),
     ];
 
     if let Some(m) = model {
@@ -171,6 +172,7 @@ pub async fn run_resume_streaming(
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
+        "--include-partial-messages".to_string(),
         "--resume".to_string(),
         claude_session_id.to_string(),
     ];
@@ -217,8 +219,25 @@ async fn run_claude_streaming(
                 };
 
                 match event.get("type").and_then(|t| t.as_str()) {
+                    Some("stream_event") => {
+                        // Token-level streaming via --include-partial-messages
+                        if let Some(inner) = event.get("event") {
+                            if inner.get("type").and_then(|t| t.as_str())
+                                == Some("content_block_delta")
+                            {
+                                if let Some(text) = inner
+                                    .get("delta")
+                                    .and_then(|d| d.get("text"))
+                                    .and_then(|t| t.as_str())
+                                {
+                                    accumulated_text.push_str(text);
+                                    let _ = text_tx.send(accumulated_text.clone());
+                                }
+                            }
+                        }
+                    }
                     Some("assistant") => {
-                        // Extract text from message.content[0].text
+                        // Snapshot event — use as fallback if stream_events didn't fire
                         if let Some(text) = event
                             .get("message")
                             .and_then(|m| m.get("content"))
@@ -227,8 +246,10 @@ async fn run_claude_streaming(
                             .and_then(|item| item.get("text"))
                             .and_then(|t| t.as_str())
                         {
-                            accumulated_text = text.to_string();
-                            let _ = text_tx.send(accumulated_text.clone());
+                            if text.len() > accumulated_text.len() {
+                                accumulated_text = text.to_string();
+                                let _ = text_tx.send(accumulated_text.clone());
+                            }
                         }
                     }
                     Some("result") => {
