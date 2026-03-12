@@ -187,6 +187,7 @@ pub async fn run_polling_loop(
     chat_id: String,
     config: Arc<Config>,
     sessions: SessionMap,
+    projects_dir: PathBuf,
 ) {
     let client = reqwest::Client::new();
     let mut offset: i64 = 0;
@@ -243,6 +244,7 @@ pub async fn run_polling_loop(
             let chat_id_clone = chat_id.clone();
             let config = config.clone();
             let sessions = sessions.clone();
+            let projects_dir = projects_dir.clone();
 
             tokio::spawn(async move {
                 handle_message(
@@ -254,6 +256,7 @@ pub async fn run_polling_loop(
                     update.update_id,
                     &config,
                     &sessions,
+                    &projects_dir,
                 )
                 .await;
             });
@@ -270,6 +273,7 @@ async fn handle_message(
     _update_id: i64,
     config: &Config,
     sessions: &SessionMap,
+    projects_dir: &std::path::Path,
 ) {
     // Determine the topic thread_id — create a new topic if none
     let effective_thread_id = if let Some(tid) = thread_id {

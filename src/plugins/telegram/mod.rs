@@ -5,6 +5,7 @@ pub mod repos;
 use crate::plugin::{EventType, GatewayEvent, Plugin, PluginContext, PluginRegistrar};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -23,15 +24,17 @@ use tokio::task::JoinHandle;
 pub struct TelegramPlugin {
     bot_token: String,
     chat_id: String,
+    projects_dir: PathBuf,
     sessions: polling::SessionMap,
     polling_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl TelegramPlugin {
-    pub fn new(bot_token: String, chat_id: String) -> Self {
+    pub fn new(bot_token: String, chat_id: String, projects_dir: PathBuf) -> Self {
         Self {
             bot_token,
             chat_id,
+            projects_dir,
             sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             polling_handle: tokio::sync::Mutex::new(None),
         }
@@ -61,10 +64,11 @@ impl Plugin for TelegramPlugin {
                 let bot_token = self.bot_token.clone();
                 let chat_id = self.chat_id.clone();
                 let sessions = self.sessions.clone();
+                let projects_dir = self.projects_dir.clone();
 
                 Box::pin(async move {
                     let handle = tokio::spawn(polling::run_polling_loop(
-                        bot_token, chat_id, config, sessions,
+                        bot_token, chat_id, config, sessions, projects_dir,
                     ));
                     let mut guard = self.polling_handle.lock().await;
                     *guard = Some(handle);

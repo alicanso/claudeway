@@ -4,6 +4,7 @@ pub mod slack;
 pub mod swagger;
 pub mod telegram;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use crate::config::PluginConfig;
 use crate::plugin::Plugin;
@@ -28,8 +29,24 @@ pub fn plugin_registry(
     if plugin_config.is_plugin_enabled("telegram", disabled_plugins, enabled_plugins) {
         let bot_token = plugin_config.get_str("telegram", "bot_token").unwrap_or_default();
         let chat_id = plugin_config.get_str("telegram", "chat_id").unwrap_or_default();
+        let projects_dir = plugin_config
+            .get_str("telegram", "projects_dir")
+            .map(|s| {
+                if s.starts_with("~/") {
+                    dirs_next::home_dir()
+                        .unwrap_or_default()
+                        .join(&s[2..])
+                } else {
+                    PathBuf::from(s)
+                }
+            })
+            .unwrap_or_else(|| {
+                dirs_next::home_dir()
+                    .unwrap_or_default()
+                    .join("Documents/GitHub")
+            });
         if !bot_token.is_empty() && !chat_id.is_empty() {
-            plugins.push(Arc::new(telegram::TelegramPlugin::new(bot_token, chat_id)));
+            plugins.push(Arc::new(telegram::TelegramPlugin::new(bot_token, chat_id, projects_dir)));
         } else {
             tracing::warn!("telegram plugin enabled but bot_token or chat_id missing");
         }
