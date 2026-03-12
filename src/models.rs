@@ -36,7 +36,7 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,

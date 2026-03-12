@@ -5,8 +5,9 @@ mod auth;
 mod claude;
 mod config;
 mod error;
-mod models;
+mod handlers;
 mod logging;
+mod models;
 mod session;
 
 #[tokio::main]
