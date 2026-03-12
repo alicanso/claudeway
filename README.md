@@ -74,11 +74,12 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 **Prerequisites:** [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) installed (`npm install -g @anthropic-ai/claude-code`)
 
 ```bash
-# Clone and build
-git clone https://github.com/alicanso/claudeway && cd claudeway
-cargo build --release
+# Download and extract
+curl -sL https://github.com/alicanso/claudeway/archive/refs/tags/v0.2.0.zip -o claudeway.zip
+unzip claudeway.zip && cd claudeway-0.2.0
 
-# Run — an API key is generated automatically
+# Build and run
+cargo build --release
 ./target/release/claudeway
 ```
 
