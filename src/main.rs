@@ -74,7 +74,7 @@ use session::SessionStore;
     ),
     security(("bearer" = []))
 )]
-struct ApiDoc;
+pub(crate) struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
