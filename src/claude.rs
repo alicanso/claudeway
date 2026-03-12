@@ -46,7 +46,7 @@ pub async fn run_task(
         args.push(sp.to_string());
     }
 
-    run_claude(config, &args, workdir, timeout_secs).await
+    run_claude(config, &args, workdir, timeout_secs, false).await
 }
 
 pub async fn run_resume(
@@ -55,6 +55,7 @@ pub async fn run_resume(
     claude_session_id: &str,
     workdir: &Path,
     timeout_secs: u64,
+    force_bypass: bool,
 ) -> Result<ClaudeResult, AppError> {
     let args = vec![
         "-p".to_string(),
@@ -65,7 +66,7 @@ pub async fn run_resume(
         claude_session_id.to_string(),
     ];
 
-    run_claude(config, &args, workdir, timeout_secs).await
+    run_claude(config, &args, workdir, timeout_secs, force_bypass).await
 }
 
 async fn run_claude(
@@ -73,11 +74,12 @@ async fn run_claude(
     args: &[String],
     workdir: &Path,
     timeout_secs: u64,
+    force_bypass: bool,
 ) -> Result<ClaudeResult, AppError> {
     let start = Instant::now();
 
     let mut full_args = Vec::new();
-    if config.bypass_permissions {
+    if config.bypass_permissions || force_bypass {
         full_args.push("--dangerously-skip-permissions".to_string());
     }
     full_args.extend_from_slice(args);
@@ -100,12 +102,13 @@ async fn run_claude(
 
     let parsed: Option<ClaudeCliOutput> = serde_json::from_str(&stdout).ok();
 
-    let (result, session_id, cost_usd, is_error) = if let Some(ref cli) = parsed {
+    let (result, session_id, cost_usd, is_error, permission_denials) = if let Some(ref cli) = parsed {
         (
             cli.result.clone(),
             cli.session_id.clone(),
             cli.cost_usd,
             cli.is_error.unwrap_or(false),
+            cli.permission_denials.clone(),
         )
     } else {
         let raw = if stdout.trim().is_empty() {
@@ -113,7 +116,7 @@ async fn run_claude(
         } else {
             Some(stdout.clone())
         };
-        (raw, None, None, false)
+        (raw, None, None, false, Vec::new())
     };
 
     let success = exit_code == Some(0) && !is_error;
@@ -132,6 +135,7 @@ async fn run_claude(
         duration_ms,
         tokens,
         cost_usd,
+        permission_denials,
     })
 }
 
@@ -163,7 +167,7 @@ pub async fn run_task_streaming(
         args.push(sp.to_string());
     }
 
-    run_claude_streaming(config, &args, workdir, timeout_secs, text_tx).await
+    run_claude_streaming(config, &args, workdir, timeout_secs, false, text_tx).await
 }
 
 pub async fn run_resume_streaming(
@@ -172,6 +176,7 @@ pub async fn run_resume_streaming(
     claude_session_id: &str,
     workdir: &Path,
     timeout_secs: u64,
+    force_bypass: bool,
     text_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<ClaudeResult, AppError> {
     let args = vec![
@@ -185,7 +190,7 @@ pub async fn run_resume_streaming(
         claude_session_id.to_string(),
     ];
 
-    run_claude_streaming(config, &args, workdir, timeout_secs, text_tx).await
+    run_claude_streaming(config, &args, workdir, timeout_secs, force_bypass, text_tx).await
 }
 
 async fn run_claude_streaming(
@@ -193,12 +198,13 @@ async fn run_claude_streaming(
     args: &[String],
     workdir: &Path,
     timeout_secs: u64,
+    force_bypass: bool,
     text_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<ClaudeResult, AppError> {
     let start = Instant::now();
 
     let mut full_args = Vec::new();
-    if config.bypass_permissions {
+    if config.bypass_permissions || force_bypass {
         full_args.push("--dangerously-skip-permissions".to_string());
     }
     full_args.extend_from_slice(args);
@@ -228,6 +234,7 @@ async fn run_claude_streaming(
     let mut session_id: Option<String> = None;
     let mut cost_usd: Option<f64> = None;
     let mut is_error = false;
+    let mut permission_denials: Vec<PermissionDenial> = Vec::new();
 
     let stream_result = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
@@ -304,6 +311,9 @@ async fn run_claude_streaming(
                         if let Some(r) = event.get("result").and_then(|r| r.as_str()) {
                             accumulated_text = r.to_string();
                         }
+                        permission_denials = event.get("permission_denials")
+                            .and_then(|p| serde_json::from_value::<Vec<PermissionDenial>>(p.clone()).ok())
+                            .unwrap_or_default();
                     }
                     _ => {}
                 }
@@ -355,6 +365,7 @@ async fn run_claude_streaming(
         duration_ms,
         tokens,
         cost_usd,
+        permission_denials,
     })
 }
 
