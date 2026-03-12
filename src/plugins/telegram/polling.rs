@@ -14,6 +14,14 @@ use super::repos::{self, RepoInfo};
 pub struct TelegramUpdate {
     pub update_id: i64,
     pub message: Option<TelegramMessage>,
+    pub callback_query: Option<CallbackQuery>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct CallbackQuery {
+    pub id: String,
+    pub data: Option<String>,
+    pub message: Option<TelegramMessage>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -71,6 +79,7 @@ pub struct SessionInfo {
     pub workdir: PathBuf,
     pub lock: Arc<tokio::sync::Mutex<()>>,
     pub state: TopicState,
+    pub pending_approval: Option<tokio::sync::oneshot::Sender<bool>>,
 }
 
 pub type SessionMap = Arc<tokio::sync::Mutex<HashMap<i64, SessionInfo>>>;
@@ -118,6 +127,49 @@ async fn edit_message(
     });
     client.post(&url).json(&body).send().await?;
     Ok(())
+}
+
+async fn answer_callback_query(client: &reqwest::Client, bot_token: &str, callback_query_id: &str, text: &str) {
+    let url = format!("https://api.telegram.org/bot{bot_token}/answerCallbackQuery");
+    let body = serde_json::json!({
+        "callback_query_id": callback_query_id,
+        "text": text,
+    });
+    let _ = client.post(&url).json(&body).send().await;
+}
+
+async fn send_message_with_keyboard(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    thread_id: i64,
+    text: &str,
+    keyboard: serde_json::Value,
+) -> anyhow::Result<i64> {
+    let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_thread_id": thread_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "reply_markup": keyboard,
+    });
+    let resp = client.post(&url).json(&body).send().await?;
+    let json: serde_json::Value = resp.json().await?;
+    json.get("result")
+        .and_then(|r| r.get("message_id"))
+        .and_then(|m| m.as_i64())
+        .ok_or_else(|| anyhow::anyhow!("No message_id in response"))
+}
+
+async fn remove_keyboard(client: &reqwest::Client, bot_token: &str, chat_id: &str, message_id: i64) {
+    let url = format!("https://api.telegram.org/bot{bot_token}/editMessageReplyMarkup");
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "reply_markup": {"inline_keyboard": []},
+    });
+    let _ = client.post(&url).json(&body).send().await;
 }
 
 /// Send typing indicator to a chat/thread.
@@ -336,6 +388,7 @@ async fn handle_message(
                         claude_session_id: None,
                         workdir: PathBuf::new(),
                         lock: Arc::new(tokio::sync::Mutex::new(())),
+                        pending_approval: None,
                         state: TopicState::AwaitingRepoSelection {
                             pending_prompt: prompt.to_string(),
                             repos: Vec::new(), // placeholder until discovery completes
@@ -735,6 +788,7 @@ async fn handle_topic_message(
                 workdir,
                 lock: Arc::new(tokio::sync::Mutex::new(())),
                 state: TopicState::Active,
+                pending_approval: None,
             }
         });
         session.lock.clone()
