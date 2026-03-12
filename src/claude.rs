@@ -220,6 +220,12 @@ async fn run_claude_streaming(
 
                 match event.get("type").and_then(|t| t.as_str()) {
                     Some("stream_event") => {
+                        // Capture session_id early from any stream_event
+                        if session_id.is_none() {
+                            if let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) {
+                                session_id = Some(sid.to_string());
+                            }
+                        }
                         // Token-level streaming via --include-partial-messages
                         if let Some(inner) = event.get("event") {
                             if inner.get("type").and_then(|t| t.as_str())
@@ -237,6 +243,12 @@ async fn run_claude_streaming(
                         }
                     }
                     Some("assistant") => {
+                        // Capture session_id from assistant event
+                        if session_id.is_none() {
+                            if let Some(sid) = event.get("session_id").and_then(|s| s.as_str()) {
+                                session_id = Some(sid.to_string());
+                            }
+                        }
                         // Snapshot event — use as fallback if stream_events didn't fire
                         if let Some(text) = event
                             .get("message")
