@@ -16,7 +16,20 @@ use crate::models::{
 };
 use crate::session::{SessionMeta, SessionStore};
 
-/// Start a new session
+#[utoipa::path(
+    post,
+    path = "/session/start",
+    tag = "Sessions",
+    summary = "Start a new session",
+    description = "Create a persistent Claude session with an isolated working directory.",
+    security(("bearer" = [])),
+    request_body = SessionStartRequest,
+    responses(
+        (status = 200, description = "Session created", body = SessionStartResponse),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError),
+        (status = 500, description = "Internal error", body = crate::error::ApiError)
+    )
+)]
 pub async fn start_session(
     Extension(_key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,
@@ -64,7 +77,23 @@ pub async fn start_session(
     }))
 }
 
-/// Continue an existing session with a new prompt
+#[utoipa::path(
+    post,
+    path = "/session/{id}",
+    tag = "Sessions",
+    summary = "Continue a session",
+    description = "Send a new prompt to an existing session. Uses --resume for conversation continuity. Concurrent requests are serialized per-session.",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Session UUID")),
+    request_body = SessionContinueRequest,
+    responses(
+        (status = 200, description = "Task completed", body = TaskResponse),
+        (status = 400, description = "Bad request", body = crate::error::ApiError),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError),
+        (status = 404, description = "Session not found", body = crate::error::ApiError),
+        (status = 408, description = "Timeout", body = crate::error::ApiError)
+    )
+)]
 pub async fn continue_session(
     Extension(key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,
@@ -172,7 +201,21 @@ pub async fn continue_session(
     }))
 }
 
-/// Get session information
+#[utoipa::path(
+    get,
+    path = "/session/{id}",
+    tag = "Sessions",
+    summary = "Get session info",
+    description = "Returns session metadata including cumulative token usage and cost.",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Session UUID")),
+    responses(
+        (status = 200, description = "Session info", body = SessionInfoResponse),
+        (status = 400, description = "Bad request", body = crate::error::ApiError),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError),
+        (status = 404, description = "Session not found", body = crate::error::ApiError)
+    )
+)]
 pub async fn get_session(
     Extension(store): Extension<Arc<SessionStore>>,
     Path(id): Path<String>,
@@ -198,7 +241,21 @@ pub async fn get_session(
     }))
 }
 
-/// Delete a session
+#[utoipa::path(
+    delete,
+    path = "/session/{id}",
+    tag = "Sessions",
+    summary = "Delete a session",
+    description = "Remove session from store and clean up auto-allocated working directory.",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Session UUID")),
+    responses(
+        (status = 200, description = "Session deleted", body = DeleteSessionResponse),
+        (status = 400, description = "Bad request", body = crate::error::ApiError),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError),
+        (status = 404, description = "Session not found", body = crate::error::ApiError)
+    )
+)]
 pub async fn delete_session(
     Extension(store): Extension<Arc<SessionStore>>,
     Path(id): Path<String>,

@@ -119,6 +119,18 @@ fn model_display_name(id: &str) -> &str {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/models",
+    tag = "Models",
+    summary = "List available models",
+    description = "Returns available Claude models. Cached with 6-hour TTL.",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Available models", body = ModelsResponse),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError)
+    )
+)]
 pub async fn list_models(cache: Arc<ModelsCache>) -> Json<ModelsResponse> {
     let models = cache.get_models().await;
     Json(ModelsResponse { models })

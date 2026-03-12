@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 // --- Shared ---
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct TokenUsage {
     pub input: u64,
     pub output: u64,
@@ -22,7 +23,7 @@ impl TokenUsage {
 
 // --- Health ---
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
@@ -31,12 +32,12 @@ pub struct HealthResponse {
 
 // --- Models ---
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -44,7 +45,7 @@ pub struct ModelInfo {
 
 // --- Task ---
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TaskRequest {
     pub prompt: String,
     pub model: Option<String>,
@@ -53,7 +54,7 @@ pub struct TaskRequest {
     pub timeout_secs: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct TaskResponse {
     pub session_id: String,
     pub result: Option<String>,
@@ -66,27 +67,27 @@ pub struct TaskResponse {
 
 // --- Session ---
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SessionStartRequest {
     pub model: Option<String>,
     pub system_prompt: Option<String>,
     pub workdir: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionStartResponse {
     pub session_id: String,
     pub workdir: String,
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SessionContinueRequest {
     pub prompt: String,
     pub timeout_secs: Option<u64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionInfoResponse {
     pub session_id: String,
     pub created_at: DateTime<Utc>,
@@ -98,7 +99,7 @@ pub struct SessionInfoResponse {
     pub cost_usd: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeleteSessionResponse {
     pub deleted: bool,
     pub session_id: String,

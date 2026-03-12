@@ -11,6 +11,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 [![Tokio](https://img.shields.io/badge/tokio-async-8B5CF6)](https://tokio.rs/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-alpine-2496ED?logo=docker&logoColor=white)](Dockerfile)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.1-6BA539?logo=openapiinitiative&logoColor=white)](#api-reference)
 
 <br />
 
@@ -37,6 +38,7 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 | **Full cost visibility** | Token counts + USD cost on every response |
 | **Per-key audit logs** | Monthly rotating JSONL files per API key |
 | **Zero-copy performance** | Axum + Tokio + DashMap. No GC pauses. No runtime overhead. |
+| **Type-safe OpenAPI** | Auto-generated OpenAPI 3.1 spec + Swagger UI at `/docs` |
 | **Deploy anywhere** | ~6 MB static binary. Alpine Docker image. One env var to configure. |
 
 ## Quick Start

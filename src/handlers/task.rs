@@ -14,6 +14,22 @@ use crate::models::{TaskRequest, TaskResponse};
 
 const DEFAULT_TIMEOUT: u64 = 120;
 
+#[utoipa::path(
+    post,
+    path = "/task",
+    tag = "Tasks",
+    summary = "Run a one-shot task",
+    description = "Execute a single Claude prompt with no session persistence. Returns result with token usage and cost.",
+    security(("bearer" = [])),
+    request_body = TaskRequest,
+    responses(
+        (status = 200, description = "Task completed", body = TaskResponse),
+        (status = 400, description = "Bad request", body = crate::error::ApiError),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError),
+        (status = 408, description = "Timeout", body = crate::error::ApiError),
+        (status = 500, description = "Internal error", body = crate::error::ApiError)
+    )
+)]
 pub async fn create_task(
     Extension(key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,

@@ -6,6 +6,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
 mod claude;
@@ -20,6 +22,47 @@ use config::Config;
 use handlers::models::ModelsCache;
 use logging::KeyLogger;
 use session::SessionStore;
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "Claudeway",
+        description = "Blazing-fast HTTP gateway for the Claude CLI. Built with Rust, Axum, and Tokio.",
+        version = "0.1.0",
+        license(name = "MIT", url = "https://opensource.org/licenses/MIT")
+    ),
+    paths(
+        handlers::health::health,
+        handlers::models::list_models,
+        handlers::task::create_task,
+        handlers::session::start_session,
+        handlers::session::continue_session,
+        handlers::session::get_session,
+        handlers::session::delete_session,
+    ),
+    components(schemas(
+        models::TokenUsage,
+        models::HealthResponse,
+        models::ModelsResponse,
+        models::ModelInfo,
+        models::TaskRequest,
+        models::TaskResponse,
+        models::SessionStartRequest,
+        models::SessionStartResponse,
+        models::SessionContinueRequest,
+        models::SessionInfoResponse,
+        models::DeleteSessionResponse,
+        error::ApiError,
+    )),
+    tags(
+        (name = "System", description = "Health and status endpoints"),
+        (name = "Models", description = "Available Claude models"),
+        (name = "Tasks", description = "One-shot Claude task execution"),
+        (name = "Sessions", description = "Persistent stateful Claude sessions")
+    ),
+    security(("bearer" = []))
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -36,14 +79,16 @@ async fn main() -> anyhow::Result<()> {
 
     let api_keys = Arc::new(config.api_keys.clone());
 
-    // Public routes (no auth)
-    let public_routes = Router::new().route(
-        "/health",
-        get({
-            let start_time = start_time.clone();
-            move || handlers::health::health(start_time.clone())
-        }),
-    );
+    // Public routes (no auth) — health + docs
+    let public_routes = Router::new()
+        .route(
+            "/health",
+            get({
+                let start_time = start_time.clone();
+                move || handlers::health::health(start_time.clone())
+            }),
+        )
+        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()));
 
     // Protected routes (auth required)
     let protected_routes = Router::new()
@@ -70,7 +115,9 @@ async fn main() -> anyhow::Result<()> {
         .layer(Extension(store))
         .layer(Extension(logger));
 
-    let app = Router::new().merge(public_routes).merge(protected_routes);
+    let app = Router::new()
+        .merge(public_routes)
+        .merge(protected_routes);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
