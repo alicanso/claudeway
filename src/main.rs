@@ -19,6 +19,7 @@ mod handlers;
 mod logging;
 mod models;
 mod session;
+mod plugin;
 #[cfg(feature = "dashboard")]
 mod admin_auth;
 #[cfg(feature = "dashboard")]
