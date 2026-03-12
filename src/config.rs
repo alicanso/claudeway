@@ -23,6 +23,10 @@ struct Cli {
     #[arg(long, env = "LOG_DIR", default_value = "./logs")]
     log_dir: String,
 
+    /// HTTP listen host
+    #[arg(long, env = "HOST", default_value = "0.0.0.0")]
+    host: String,
+
     /// HTTP listen port
     #[arg(short, long, env = "PORT", default_value_t = 3000)]
     port: u16,
@@ -54,6 +58,7 @@ pub struct Config {
     pub claude_bin: String,
     pub claude_workdir: String,
     pub log_dir: String,
+    pub host: String,
     pub port: u16,
     pub log_level: String,
     /// If a key was auto-generated, this holds the secret so we can print it at startup.
@@ -87,6 +92,7 @@ impl Config {
             claude_bin: cli.claude_bin,
             claude_workdir: cli.workdir,
             log_dir: cli.log_dir,
+            host: cli.host,
             port: cli.port,
             log_level: cli.log_level,
             generated_key,

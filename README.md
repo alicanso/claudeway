@@ -44,6 +44,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 - [Plugins](#plugins)
   - [Dashboard](#dashboard)
   - [Swagger UI](#swagger-ui)
+  - [Cloudflare Tunnel](#cloudflare-tunnel)
   - [Telegram](#telegram)
   - [Slack](#slack)
 - [Logging](#logging)
@@ -336,6 +337,7 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `--claude-bin` | `CLAUDE_BIN` | `claude` | Path to claude CLI binary |
 | `--workdir` | `CLAUDE_WORKDIR` | `/tmp/claude-tasks` | Base directory for session workdirs |
 | `--log-dir` | `LOG_DIR` | `./logs` | Base directory for per-key log files |
+| `--host` | `HOST` | `0.0.0.0` | HTTP listen host |
 | `-p, --port` | `PORT` | `3000` | HTTP listen port |
 | `--log-level` | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
 | `--config` | — | `./claudeway.toml` | Path to config file |
@@ -417,6 +419,27 @@ Admin key = first key in your `--keys` list. Sessions expire after 1 hour.
 ### Swagger UI
 
 Auto-generated OpenAPI 3.1 spec served at `/docs`.
+
+### Cloudflare Tunnel
+
+Expose your server to the internet via [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). Requires `cloudflared` installed on the system.
+
+**Quick tunnel** (zero config, random URL — great for testing):
+
+```toml
+[plugins.cloudflare_tunnel]
+enabled = true
+```
+
+**Named tunnel** (persistent custom domain):
+
+```toml
+[plugins.cloudflare_tunnel]
+enabled = true
+tunnel_token = "eyJhIjoiNGY..."
+```
+
+Get your tunnel token from the [Cloudflare Zero Trust dashboard](https://one.dash.cloudflare.com/) under Networks > Tunnels.
 
 ### Telegram
 

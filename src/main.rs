@@ -176,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(plugin_routes)
         .layer(Extension(plugin_ctx.clone()));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+    let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
     let enabled_plugin_names: Vec<String> = plugin_list.iter().map(|p| p.name().to_string()).collect();

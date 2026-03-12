@@ -1,6 +1,6 @@
 [package]
 name = "claudeway"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Production-grade HTTP wrapper around the Claude CLI"
 license = "MIT"
@@ -33,6 +33,7 @@ mime_guess = "2"
 toml_crate = { package = "toml", version = "0.8" }
 trait-variant = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+crossterm = "0.28"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,3 +1,4 @@
+pub mod cloudflare_tunnel;
 pub mod dashboard;
 pub mod slack;
 pub mod swagger;
@@ -32,6 +33,11 @@ pub fn plugin_registry(
         } else {
             tracing::warn!("telegram plugin enabled but bot_token or chat_id missing");
         }
+    }
+
+    if plugin_config.is_plugin_enabled("cloudflare_tunnel", disabled_plugins, enabled_plugins) {
+        let tunnel_token = plugin_config.get_str("cloudflare_tunnel", "tunnel_token");
+        plugins.push(Arc::new(cloudflare_tunnel::CloudflareTunnelPlugin::new(tunnel_token)));
     }
 
     if plugin_config.is_plugin_enabled("slack", disabled_plugins, enabled_plugins) {

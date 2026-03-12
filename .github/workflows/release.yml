@@ -43,6 +43,10 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Ad-hoc sign binary (macOS)
+        if: runner.os == 'macOS'
+        run: codesign --sign - --force target/${{ matrix.target }}/release/claudeway
+
       - name: Rename binary (unix)
         if: runner.os != 'Windows'
         run: cp target/${{ matrix.target }}/release/claudeway ${{ matrix.name }}
