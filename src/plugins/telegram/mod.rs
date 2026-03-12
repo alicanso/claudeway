@@ -1,9 +1,17 @@
+pub mod markdown;
+pub mod polling;
+
 use crate::plugin::{EventType, GatewayEvent, Plugin, PluginContext, PluginRegistrar};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use tokio::task::JoinHandle;
 
-/// Telegram bot adapter — forwards Claude responses to a Telegram chat.
-/// Configure via claudeway.toml:
+/// Telegram bot plugin — two-way Claude chat via Forum Topics + event notifications.
+///
+/// Each Forum Topic maps to an independent Claude session.
+/// Also sends notifications for RequestCompleted and SessionCompleted events.
 ///
 /// ```toml
 /// [plugins.telegram]
@@ -14,11 +22,18 @@ use std::pin::Pin;
 pub struct TelegramPlugin {
     bot_token: String,
     chat_id: String,
+    sessions: polling::SessionMap,
+    polling_handle: tokio::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl TelegramPlugin {
     pub fn new(bot_token: String, chat_id: String) -> Self {
-        Self { bot_token, chat_id }
+        Self {
+            bot_token,
+            chat_id,
+            sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            polling_handle: tokio::sync::Mutex::new(None),
+        }
     }
 }
 
@@ -28,6 +43,7 @@ impl Plugin for TelegramPlugin {
     }
 
     fn on_register(&self, registrar: &mut PluginRegistrar) -> anyhow::Result<()> {
+        registrar.subscribe(EventType::ServerStarted);
         registrar.subscribe(EventType::RequestCompleted);
         registrar.subscribe(EventType::SessionCompleted);
         Ok(())
@@ -36,39 +52,74 @@ impl Plugin for TelegramPlugin {
     fn on_event(
         &self,
         event: &GatewayEvent,
-        _ctx: &PluginContext,
+        ctx: &PluginContext,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
-        let message = match event {
-            GatewayEvent::RequestCompleted { key_id, path, status, duration } => {
-                Some(format!(
-                    "Request completed: {path} (key: {key_id}, status: {status}, {duration:?})"
-                ))
+        match event {
+            GatewayEvent::ServerStarted { .. } => {
+                let config = ctx.config.clone();
+                let bot_token = self.bot_token.clone();
+                let chat_id = self.chat_id.clone();
+                let sessions = self.sessions.clone();
+
+                Box::pin(async move {
+                    let handle = tokio::spawn(polling::run_polling_loop(
+                        bot_token, chat_id, config, sessions,
+                    ));
+                    let mut guard = self.polling_handle.lock().await;
+                    *guard = Some(handle);
+                    tracing::info!("telegram polling loop started");
+                    Ok(())
+                })
             }
-            GatewayEvent::SessionCompleted { session_id, token_usage } => {
-                Some(format!(
+
+            GatewayEvent::RequestCompleted {
+                key_id,
+                path,
+                status,
+                duration,
+            } => {
+                let text = format!(
+                    "Request completed: {path} (key: {key_id}, status: {status}, {duration:?})"
+                );
+                let bot_token = self.bot_token.clone();
+                let chat_id = self.chat_id.clone();
+                Box::pin(async move {
+                    let client = reqwest::Client::new();
+                    let _ =
+                        polling::send_message(&client, &bot_token, &chat_id, None, &text).await;
+                    Ok(())
+                })
+            }
+
+            GatewayEvent::SessionCompleted {
+                session_id,
+                token_usage,
+            } => {
+                let text = format!(
                     "Session completed: {session_id} (tokens: {} in / {} out)",
                     token_usage.input, token_usage.output
-                ))
-            }
-            _ => None,
-        };
-
-        Box::pin(async move {
-            if let Some(text) = message {
-                let url = format!(
-                    "https://api.telegram.org/bot{}/sendMessage",
-                    self.bot_token
                 );
-                let client = reqwest::Client::new();
-                client
-                    .post(&url)
-                    .json(&serde_json::json!({
-                        "chat_id": self.chat_id,
-                        "text": text,
-                        "parse_mode": "HTML"
-                    }))
-                    .send()
-                    .await?;
+                let bot_token = self.bot_token.clone();
+                let chat_id = self.chat_id.clone();
+                Box::pin(async move {
+                    let client = reqwest::Client::new();
+                    let _ =
+                        polling::send_message(&client, &bot_token, &chat_id, None, &text).await;
+                    Ok(())
+                })
+            }
+
+            _ => Box::pin(async { Ok(()) }),
+        }
+    }
+
+    fn on_shutdown(&self) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + '_>> {
+        Box::pin(async {
+            let mut guard = self.polling_handle.lock().await;
+            if let Some(handle) = guard.take() {
+                tracing::info!("stopping telegram polling loop...");
+                handle.abort();
+                tracing::info!("telegram polling loop stopped");
             }
             Ok(())
         })
