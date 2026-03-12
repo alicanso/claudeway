@@ -331,18 +331,21 @@ fn detect_telegram_chat_id(bot_token: &str) -> Option<String> {
         bot_token
     );
 
-    let response = match reqwest::blocking::get(&url) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("  \x1b[31m✗\x1b[0m Failed to reach Telegram API: {e}");
-            return None;
-        }
-    };
-
-    let body: serde_json::Value = match response.json() {
+    // Run blocking HTTP call on a separate thread to avoid nesting
+    // a Tokio runtime inside the #[tokio::main] async context.
+    let body: serde_json::Value = match std::thread::spawn(move || -> Result<serde_json::Value, String> {
+        let response = reqwest::blocking::get(&url)
+            .map_err(|e| format!("Failed to reach Telegram API: {e}"))?;
+        response
+            .json()
+            .map_err(|e| format!("Invalid response from Telegram: {e}"))
+    })
+    .join()
+    .unwrap()
+    {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("  \x1b[31m✗\x1b[0m Invalid response from Telegram: {e}");
+            eprintln!("  \x1b[31m✗\x1b[0m {e}");
             return None;
         }
     };
