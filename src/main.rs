@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use utoipa::OpenApi;
+#[cfg(feature = "swagger")]
 use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
@@ -92,15 +93,20 @@ async fn main() -> anyhow::Result<()> {
     let api_keys = Arc::new(config.api_keys.clone());
 
     // Public routes (no auth) — health + docs
-    let public_routes = Router::new()
+    let mut public_routes = Router::new()
         .route(
             "/health",
             get({
                 let start_time = start_time.clone();
                 move || handlers::health::health(start_time.clone())
             }),
-        )
-        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()));
+        );
+
+    #[cfg(feature = "swagger")]
+    {
+        public_routes = public_routes
+            .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()));
+    }
 
     // Protected routes (auth required)
     let protected_routes = Router::new()

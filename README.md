@@ -15,7 +15,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 
 <br />
 
-**~6 MB binary** &nbsp;&bull;&nbsp; **~2 MB Docker image** &nbsp;&bull;&nbsp; **~5 ms cold start** &nbsp;&bull;&nbsp; **Lock-free concurrent sessions**
+**~3 MB binary** &nbsp;&bull;&nbsp; **Alpine Docker image** &nbsp;&bull;&nbsp; **Lock-free concurrent sessions**
 
 [Quick Start](#quick-start) &nbsp;&bull;&nbsp; [API Reference](#api-reference) &nbsp;&bull;&nbsp; [Configuration](#configuration) &nbsp;&bull;&nbsp; [Architecture](#architecture)
 
@@ -39,7 +39,7 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 | **Per-key audit logs** | Monthly rotating JSONL files per API key |
 | **Zero-copy performance** | Axum + Tokio + DashMap. No GC pauses. No runtime overhead. |
 | **Type-safe OpenAPI** | Auto-generated OpenAPI 3.1 spec + Swagger UI at `/docs` |
-| **Deploy anywhere** | ~6 MB static binary. Alpine Docker image. Zero config to start. |
+| **Deploy anywhere** | Single static binary. Alpine Docker image. Zero config to start. |
 
 ## Quick Start
 
@@ -318,9 +318,11 @@ Every Claude invocation is logged with full detail:
 For production deployments:
 
 ```bash
-# Optimized release build (~6 MB)
+# Optimized release build (~3 MB)
 cargo build --release
-# Binary at target/release/claudeway
+
+# With Swagger UI at /docs (~14 MB)
+cargo build --release --features swagger
 
 # Docker Compose
 cp .env.example .env    # edit with your keys
