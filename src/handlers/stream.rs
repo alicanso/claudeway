@@ -112,6 +112,14 @@ pub async fn create_task_stream(
                     });
                 }
 
+                // Emit permission_denied event if needed
+                if !result.permission_denials.is_empty() {
+                    let denials_json = serde_json::to_string(&result.permission_denials).unwrap_or_default();
+                    let _ = sse_tx.send(Ok(Event::default()
+                        .event("permission_denied")
+                        .data(denials_json)));
+                }
+
                 // Send final "done" event with complete TaskResponse
                 let response = TaskResponse {
                     session_id: session_id_clone,
@@ -125,6 +133,7 @@ pub async fn create_task_stream(
                     } else {
                         Some("Claude CLI returned an error".to_string())
                     },
+                    permission_denials: result.permission_denials,
                 };
                 let json = serde_json::to_string(&response).unwrap_or_default();
                 let _ = sse_tx.send(Ok(Event::default().event("done").data(json)));
@@ -138,6 +147,7 @@ pub async fn create_task_stream(
                     tokens: None,
                     cost_usd: None,
                     error: Some(e.body.error),
+                    permission_denials: Vec::new(),
                 };
                 let json = serde_json::to_string(&error_response).unwrap_or_default();
                 let _ = sse_tx.send(Ok(Event::default().event("done").data(json)));
@@ -303,6 +313,7 @@ async fn handle_ws(
                     } else {
                         Some("Claude CLI returned an error".to_string())
                     },
+                    permission_denials: result.permission_denials,
                 }
             }
             Err(e) => TaskResponse {
@@ -313,6 +324,7 @@ async fn handle_ws(
                 tokens: None,
                 cost_usd: None,
                 error: Some(e.body.error),
+                permission_denials: Vec::new(),
             },
         };
 

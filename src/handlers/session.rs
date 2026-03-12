@@ -154,6 +154,7 @@ pub async fn continue_session(
             claude_session_id,
             &session.workdir,
             timeout_secs,
+            false,
         )
         .await?
     } else {
@@ -236,6 +237,7 @@ pub async fn continue_session(
         } else {
             None
         },
+        permission_denials: claude_result.permission_denials,
     }))
 }
 

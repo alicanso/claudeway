@@ -122,5 +122,6 @@ pub async fn create_task(
         tokens: claude_result.tokens,
         cost_usd: claude_result.cost_usd,
         error,
+        permission_denials: claude_result.permission_denials,
     }))
 }

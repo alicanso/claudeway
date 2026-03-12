@@ -753,7 +753,7 @@ async fn handle_topic_message(
 
     let claude_result = if let Some(ref sid) = claude_session_id {
         tracing::info!(thread_id, session_id = %sid, "resuming Claude session");
-        claude::run_resume_streaming(config, prompt, sid, &workdir, 600, text_tx).await
+        claude::run_resume_streaming(config, prompt, sid, &workdir, 600, false, text_tx).await
     } else {
         tracing::info!(thread_id, "starting new Claude session");
         claude::run_task_streaming(config, prompt, None, None, &workdir, 600, text_tx).await
