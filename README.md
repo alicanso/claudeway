@@ -42,6 +42,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
   - [Sessions](#sessions)
 - [Configuration](#configuration)
   - [API Keys](#api-keys)
+  - [Permission Approval](#permission-approval)
   - [Config File](#config-file)
 - [Plugins](#plugins)
   - [Dashboard](#dashboard)
@@ -399,6 +400,7 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `--enable-plugin` | — | — | Enable plugins by name (comma-separated) |
 | `--disable-plugin` | — | — | Disable plugins by name (comma-separated) |
 | `-f, --force` | — | — | Skip interactive prompts |
+| `--no-permissions-bypass` | `NO_PERMISSIONS_BYPASS` | — | Disable `--dangerously-skip-permissions` (require Claude to ask for permission) |
 
 ### API Keys
 
@@ -422,6 +424,39 @@ claudeway
 ```
 
 Each key gets its own log directory, so you always know who did what.
+
+### Permission Approval
+
+By default, Claudeway runs Claude with `--dangerously-skip-permissions` so all tool calls are auto-approved. If you start with `--no-permissions-bypass`, Claude will report permission denials instead — and you can approve them via the API or Telegram.
+
+**API response:** When permissions are denied, the response includes a `permission_denials` array:
+
+```json
+{
+  "result": "...",
+  "success": true,
+  "permission_denials": [
+    {
+      "tool_name": "Write",
+      "tool_use_id": "toolu_01TSR...",
+      "tool_input": { "file_path": "/tmp/test.txt", "content": "hello\n" }
+    }
+  ]
+}
+```
+
+**Approve via API:** Use `POST /session/{id}/approve` to approve the denied tool calls and resume with `--dangerously-skip-permissions`:
+
+```bash
+curl -X POST http://localhost:3000/session/$SESSION/approve \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tool_use_ids": ["toolu_01TSR..."]}'
+```
+
+**Telegram:** When permission denials occur, an inline keyboard with "Onayla" (Approve) / "Reddet" (Deny) buttons is shown. Clicking "Onayla" resumes with bypass. Approval times out after 60 seconds.
+
+**SSE/WS:** A `permission_denied` event is emitted before the `done` event when denials are present.
 
 ### Config File
 
