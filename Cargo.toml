@@ -32,6 +32,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 [features]
 default = []
 swagger = ["utoipa-swagger-ui"]
+dashboard = []
 
 [dev-dependencies]
 tempfile = "3"

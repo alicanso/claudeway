@@ -18,6 +18,8 @@ mod handlers;
 mod logging;
 mod models;
 mod session;
+#[cfg(feature = "dashboard")]
+mod admin_auth;
 
 use config::Config;
 use handlers::models::ModelsCache;
