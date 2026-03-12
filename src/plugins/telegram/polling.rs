@@ -275,28 +275,91 @@ async fn handle_message(
     sessions: &SessionMap,
     projects_dir: &std::path::Path,
 ) {
-    // Determine the topic thread_id — create a new topic if none
-    let effective_thread_id = if let Some(tid) = thread_id {
-        tid
-    } else {
-        // Create a new Forum Topic named after the first 50 chars of the message
-        let topic_name = if prompt.len() > 50 {
-            format!("{}...", &prompt[..50])
-        } else {
-            prompt.to_string()
+    // Determine the topic thread_id — handle repo selection flow
+    let (effective_thread_id, prompt) = if let Some(tid) = thread_id {
+        // Check if this topic is awaiting repo selection
+        let is_awaiting = {
+            let map = sessions.lock().await;
+            map.get(&tid)
+                .map_or(false, |s| matches!(s.state, TopicState::AwaitingRepoSelection { .. }))
         };
-        match create_forum_topic(client, bot_token, chat_id, &topic_name).await {
-            Ok(tid) => {
-                tracing::info!("created forum topic {tid} for new message");
-                tid
-            }
-            Err(e) => {
-                tracing::error!("failed to create forum topic: {e}");
-                let _ = send_message(client, bot_token, chat_id, None, &format!("Failed to create topic: {e}")).await;
+
+        if is_awaiting {
+            if let Some(pending_prompt) =
+                handle_repo_selection(client, bot_token, chat_id, tid, prompt, sessions, projects_dir).await
+            {
+                // Repo selected — continue with the pending prompt
+                (tid, std::borrow::Cow::Owned(pending_prompt))
+            } else {
                 return;
             }
+        } else {
+            (tid, std::borrow::Cow::Borrowed(prompt))
         }
+    } else {
+        // New message — start repo selection flow
+        let repos = match repos::discover_repos().await {
+            Ok(r) if r.is_empty() => {
+                let _ = send_message(client, bot_token, chat_id, None, "No repositories found.")
+                    .await;
+                return;
+            }
+            Ok(r) => r,
+            Err(e) => {
+                let _ = send_message(
+                    client,
+                    bot_token,
+                    chat_id,
+                    None,
+                    &format!("Failed to list repos: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        // Create topic for this session
+        let topic_name = "Selecting repo...";
+        let tid = match create_forum_topic(client, bot_token, chat_id, topic_name).await {
+            Ok(tid) => tid,
+            Err(e) => {
+                let _ = send_message(
+                    client,
+                    bot_token,
+                    chat_id,
+                    None,
+                    &format!("Failed to create topic: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+
+        // Send repo list
+        let (msg, _) = repos::format_repo_page(&repos, 0, 20);
+        let _ = send_message(client, bot_token, chat_id, Some(tid), &msg).await;
+
+        // Store state
+        {
+            let mut map = sessions.lock().await;
+            map.insert(
+                tid,
+                SessionInfo {
+                    claude_session_id: None,
+                    workdir: PathBuf::new(), // placeholder until repo selected
+                    lock: Arc::new(tokio::sync::Mutex::new(())),
+                    state: TopicState::AwaitingRepoSelection {
+                        pending_prompt: prompt.to_string(),
+                        repos,
+                        page: 0,
+                    },
+                },
+            );
+        }
+        return; // Don't proceed to Claude yet
     };
+
+    let prompt = &*prompt;
 
     // Handle /close command — delete topic and remove session
     if prompt.trim() == "/close" {
@@ -304,10 +367,48 @@ async fn handle_message(
             let mut map = sessions.lock().await;
             map.remove(&effective_thread_id);
         }
-        let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), "Session closed.").await;
+        let _ = send_message(
+            client,
+            bot_token,
+            chat_id,
+            Some(effective_thread_id),
+            "Session closed.",
+        )
+        .await;
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if let Err(e) = delete_forum_topic(client, bot_token, chat_id, effective_thread_id).await {
             tracing::error!("failed to delete forum topic: {e}");
+        }
+        return;
+    }
+
+    // Handle /repos command — re-trigger repo selection in this topic
+    if prompt.trim() == "/repos" {
+        let repos = match repos::discover_repos().await {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = send_message(
+                    client,
+                    bot_token,
+                    chat_id,
+                    Some(effective_thread_id),
+                    &format!("Failed to list repos: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let (msg, _) = repos::format_repo_page(&repos, 0, 20);
+        let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), &msg).await;
+        {
+            let mut map = sessions.lock().await;
+            if let Some(session) = map.get_mut(&effective_thread_id) {
+                session.state = TopicState::AwaitingRepoSelection {
+                    pending_prompt: String::new(),
+                    repos,
+                    page: 0,
+                };
+            }
         }
         return;
     }
@@ -318,7 +419,13 @@ async fn handle_message(
     let typing_chat = chat_id.to_string();
     let typing_handle = tokio::spawn(async move {
         loop {
-            let _ = send_typing(&typing_client, &typing_token, &typing_chat, Some(effective_thread_id)).await;
+            let _ = send_typing(
+                &typing_client,
+                &typing_token,
+                &typing_chat,
+                Some(effective_thread_id),
+            )
+            .await;
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
         }
     });
@@ -342,7 +449,8 @@ async fn handle_message(
     });
 
     // Run Claude with streaming
-    let result = handle_topic_message(prompt, effective_thread_id, config, sessions, text_tx).await;
+    let result =
+        handle_topic_message(prompt, effective_thread_id, config, sessions, text_tx).await;
 
     // Stop typing indicator
     typing_handle.abort();
@@ -363,8 +471,148 @@ async fn handle_message(
             let _ = edit_message(client, bot_token, chat_id, sent_message_ids[i], chunk).await;
         } else {
             // Send additional messages for remaining chunks
-            let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), chunk).await;
+            let _ = send_message(
+                client,
+                bot_token,
+                chat_id,
+                Some(effective_thread_id),
+                chunk,
+            )
+            .await;
         }
+    }
+}
+
+/// Handle user input during repo selection (number, /next, /prev).
+/// Returns `Some(pending_prompt)` when a repo is selected and Claude should proceed.
+async fn handle_repo_selection(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    thread_id: i64,
+    input: &str,
+    sessions: &SessionMap,
+    projects_dir: &std::path::Path,
+) -> Option<String> {
+    let input = input.trim();
+
+    // Handle /next and /prev commands
+    if input == "/next" || input == "/prev" {
+        let mut map = sessions.lock().await;
+        if let Some(session) = map.get_mut(&thread_id) {
+            if let TopicState::AwaitingRepoSelection { repos, page, .. } = &mut session.state {
+                let per_page = 20;
+                if input == "/next" {
+                    let max_page = repos.len().saturating_sub(1) / per_page;
+                    if *page < max_page {
+                        *page += 1;
+                    }
+                } else if *page > 0 {
+                    *page -= 1;
+                }
+                let (msg, _) = repos::format_repo_page(repos, *page, per_page);
+                let _ = send_message(client, bot_token, chat_id, Some(thread_id), &msg).await;
+            }
+        }
+        return None;
+    }
+
+    // Parse number selection
+    let Ok(num) = input.parse::<usize>() else {
+        let _ = send_message(
+            client,
+            bot_token,
+            chat_id,
+            Some(thread_id),
+            "Please send a number to select a repo, /next for more, or /prev to go back.",
+        )
+        .await;
+        return None;
+    };
+
+    // Extract repo info and pending prompt
+    let (repo, pending_prompt) = {
+        let map = sessions.lock().await;
+        let session = map.get(&thread_id)?;
+        let TopicState::AwaitingRepoSelection {
+            repos,
+            pending_prompt,
+            ..
+        } = &session.state
+        else {
+            return None;
+        };
+
+        if num == 0 || num > repos.len() {
+            let _ = send_message(
+                client,
+                bot_token,
+                chat_id,
+                Some(thread_id),
+                &format!("Invalid number. Choose 1-{}.", repos.len()),
+            )
+            .await;
+            return None;
+        }
+        (repos[num - 1].clone(), pending_prompt.clone())
+    };
+
+    // Clone or pull the repo
+    let _ = send_message(
+        client,
+        bot_token,
+        chat_id,
+        Some(thread_id),
+        &format!("Setting up {}...", repo.full_name),
+    )
+    .await;
+
+    let repo_path = match repos::ensure_repo(&repo, projects_dir).await {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = send_message(
+                client,
+                bot_token,
+                chat_id,
+                Some(thread_id),
+                &format!("Failed to set up repo: {e}"),
+            )
+            .await;
+            return None;
+        }
+    };
+
+    // Rename the topic to the repo name
+    let rename_url = format!("https://api.telegram.org/bot{bot_token}/editForumTopic");
+    let rename_body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_thread_id": thread_id,
+        "name": &repo.full_name,
+    });
+    let _ = client.post(&rename_url).json(&rename_body).send().await;
+
+    // Transition to Active state
+    {
+        let mut map = sessions.lock().await;
+        if let Some(session) = map.get_mut(&thread_id) {
+            session.workdir = repo_path;
+            session.state = TopicState::Active;
+        }
+    }
+
+    let _ = send_message(
+        client,
+        bot_token,
+        chat_id,
+        Some(thread_id),
+        &format!("Using {}\n\nProcessing your prompt...", repo.full_name),
+    )
+    .await;
+
+    if pending_prompt.is_empty() {
+        None
+    } else {
+        Some(pending_prompt)
     }
 }
 
