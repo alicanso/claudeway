@@ -63,11 +63,15 @@ docker run -p 3000:3000 claudeway
 
 **Pre-built binary** (no Rust required):
 
-Download the latest binary from [GitHub Releases](https://github.com/alicanso/claudeway/releases), then:
-
 ```bash
-chmod +x claudeway
-./claudeway
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-aarch64-apple-darwin -o claudeway && chmod +x claudeway && ./claudeway
+
+# macOS (Intel)
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-apple-darwin -o claudeway && chmod +x claudeway && ./claudeway
+
+# Linux (x86_64)
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-unknown-linux-musl -o claudeway && chmod +x claudeway && ./claudeway
 ```
 
 **From source** (Rust developers):
