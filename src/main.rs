@@ -25,6 +25,8 @@ mod admin_auth;
 mod admin_models;
 #[cfg(feature = "dashboard")]
 mod admin_stats;
+#[cfg(feature = "dashboard")]
+mod dashboard;
 
 use config::Config;
 use handlers::models::ModelsCache;
@@ -170,7 +172,10 @@ async fn main() -> anyhow::Result<()> {
 
     #[cfg(feature = "dashboard")]
     {
-        app = app.merge(admin_routes);
+        app = app
+            .merge(admin_routes)
+            .route("/dashboard", axum::routing::get(dashboard::serve_dashboard))
+            .route("/dashboard/{*rest}", axum::routing::get(dashboard::serve_dashboard));
     }
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
