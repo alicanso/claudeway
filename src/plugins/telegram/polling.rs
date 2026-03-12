@@ -26,6 +26,8 @@ pub struct CallbackQuery {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TelegramMessage {
+    #[serde(default)]
+    pub message_id: i64,
     pub chat: TelegramChat,
     pub text: Option<String>,
     pub message_thread_id: Option<i64>,
@@ -277,6 +279,19 @@ pub async fn run_polling_loop(
 
         for update in body.result {
             offset = update.update_id + 1;
+
+            // Handle callback queries (permission approval buttons)
+            if let Some(callback) = update.callback_query {
+                let bot_token = bot_token.clone();
+                let chat_id = chat_id.clone();
+                let sessions = sessions.clone();
+                let client = client.clone();
+
+                tokio::spawn(async move {
+                    handle_callback_query(&client, &bot_token, &chat_id, callback, sessions).await;
+                });
+                continue;
+            }
 
             let Some(message) = update.message else {
                 continue;
@@ -905,6 +920,44 @@ async fn handle_streaming_updates(
     }
 
     message_ids
+}
+
+async fn handle_callback_query(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    callback: CallbackQuery,
+    sessions: SessionMap,
+) {
+    let Some(data) = callback.data else { return };
+
+    let parts: Vec<&str> = data.splitn(2, ':').collect();
+    if parts.len() != 2 { return }
+
+    let (action, thread_id_str) = (parts[0], parts[1]);
+    let Ok(thread_id) = thread_id_str.parse::<i64>() else { return };
+
+    let approved = action == "perm_approve";
+
+    // Take the pending approval sender
+    let sender = {
+        let mut sessions_guard = sessions.lock().await;
+        sessions_guard.get_mut(&thread_id)
+            .and_then(|s| s.pending_approval.take())
+    };
+
+    if let Some(tx) = sender {
+        let _ = tx.send(approved);
+        let text = if approved { "Onaylandı" } else { "Reddedildi" };
+        answer_callback_query(client, bot_token, &callback.id, text).await;
+    } else {
+        answer_callback_query(client, bot_token, &callback.id, "Süre doldu").await;
+    }
+
+    // Remove keyboard from the original message
+    if let Some(msg) = callback.message {
+        remove_keyboard(client, bot_token, chat_id, msg.message_id).await;
+    }
 }
 
 async fn handle_topic_message(
