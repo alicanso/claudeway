@@ -437,21 +437,26 @@ async fn handle_topic_message(
     tokio::fs::create_dir_all(&workdir).await?;
 
     let claude_result = if let Some(ref sid) = claude_session_id {
+        tracing::info!(thread_id, session_id = %sid, "resuming Claude session");
         claude::run_resume_streaming(config, prompt, sid, &workdir, 600, text_tx).await
     } else {
+        tracing::info!(thread_id, "starting new Claude session (no stored session_id)");
         claude::run_task_streaming(config, prompt, None, None, &workdir, 600, text_tx).await
     };
 
     match claude_result {
         Ok(result) => {
             // Store claude_session_id if we got one
-            if result.claude_session_id.is_some() {
+            if let Some(ref sid) = result.claude_session_id {
+                tracing::info!(thread_id, session_id = %sid, "captured Claude session_id");
                 let mut map = sessions.lock().await;
                 if let Some(session) = map.get_mut(&thread_id) {
                     if session.claude_session_id.is_none() {
-                        session.claude_session_id = result.claude_session_id;
+                        session.claude_session_id = result.claude_session_id.clone();
                     }
                 }
+            } else {
+                tracing::warn!(thread_id, "Claude returned no session_id");
             }
             Ok(result
                 .result
