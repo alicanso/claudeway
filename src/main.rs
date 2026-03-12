@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
+mod auth;
 mod config;
 mod error;
 mod models;
+mod logging;
+mod session;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
