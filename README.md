@@ -40,6 +40,8 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
   - [Sessions](#sessions)
 - [Configuration](#configuration)
   - [API Keys](#api-keys)
+  - [Config File](#config-file)
+  - [Plugin System](#plugin-system)
 - [Logging](#logging)
 - [Performance](#performance)
 - [Architecture](#architecture)
@@ -347,6 +349,8 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `--log-dir` | `LOG_DIR` | `./logs` | Base directory for per-key log files |
 | `-p, --port` | `PORT` | `3000` | HTTP listen port |
 | `--log-level` | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
+| `--config` | — | `./claudeway.toml` | Path to config file |
+| `--disable-plugin` | — | — | Disable plugins by name (comma-separated) |
 
 ### API Keys
 
@@ -370,6 +374,45 @@ claudeway
 ```
 
 Each key gets its own log directory, so you always know who did what.
+
+### Config File
+
+Claudeway can be configured with a `claudeway.toml` file. If no `--config` flag is provided, it looks for `claudeway.toml` in the current directory. If not found, CLI-only mode is used (fully backward compatible).
+
+```toml
+[plugins.dashboard]
+enabled = true
+
+[plugins.swagger]
+enabled = true
+```
+
+Precedence: **defaults → config file → CLI flags** (last wins).
+
+### Plugin System
+
+Claudeway uses a plugin-based architecture. Features like the admin dashboard and Swagger UI are implemented as plugins that register HTTP routes and subscribe to gateway events.
+
+**Compiled-in plugins:**
+
+| Plugin | Feature Flag | Description |
+|--------|-------------|-------------|
+| `dashboard` | `--features dashboard` | Admin dashboard with sessions, logs, costs, and key stats |
+| `swagger` | `--features swagger` | Swagger UI at `/docs` with OpenAPI 3.1 spec |
+
+Plugins are enabled by default when compiled in. Disable them at runtime:
+
+```bash
+# Via config file
+# [plugins.swagger]
+# enabled = false
+
+# Via CLI flag
+claudeway --disable-plugin swagger
+
+# Disable multiple
+claudeway --disable-plugin dashboard,swagger
+```
 
 ## Logging
 
@@ -426,31 +469,35 @@ The bottleneck is always Claude, never Claudeway.
     │    Server     │  Zero-copy routing
     └───────┬───────┘
             │
-     ┌──────┴──────┐
-     │             │
- ┌───▼────┐   ┌───▼────┐
- │ Public │   │  Auth  │  Bearer token → key_id
- │ /health│   │Midlware│  O(1) HashMap lookup
- └────────┘   └───┬────┘
-                  │
-       ┌──────────┼──────────┐
-       │          │          │
-  ┌────▼───┐ ┌───▼────┐ ┌───▼─────┐
-  │ /task  │ │/session│ │ /models │  6hr TTL cache
-  │Handler │ │Handler │ │ Handler │
-  └────┬───┘ └───┬────┘ └─────────┘
-       │         │
-       └────┬────┘
+     ┌──────┼──────────────┐
+     │      │              │
+ ┌───▼────┐ │         ┌───▼────────┐
+ │ Public │ │         │  Plugin    │  Dashboard, Swagger
+ │ /health│ │         │  Routes   │  Registered at startup
+ └────────┘ │         └───────────┘
+        ┌───▼────┐
+        │  Auth  │  Bearer token → key_id
+        │Midlware│  O(1) HashMap lookup
+        └───┬────┘
             │
-   ┌────────▼────────┐
-   │ Claude Executor │  tokio::process::Command
-   │   + Timeout     │  Token extraction from JSONL
-   └────────┬────────┘
-            │
-   ┌────────▼────────┐
-   │   Per-Key JSON  │  Monthly rotation
-   │     Logger      │  Structured audit trail
-   └─────────────────┘
+  ┌─────────┼──────────┐
+  │         │          │
+ ┌▼──────┐ ┌▼───────┐ ┌▼────────┐
+ │ /task │ │/session│ │ /models │  6hr TTL cache
+ │Handler│ │Handler │ │ Handler │
+ └───┬───┘ └───┬────┘ └─────────┘
+     │         │
+     └────┬────┘
+          │              ┌─────────────┐
+ ┌────────▼────────┐     │  EventBus   │  Fire-and-forget
+ │ Claude Executor │────▶│  (plugins)  │  tokio::spawn
+ │   + Timeout     │     └─────────────┘
+ └────────┬────────┘
+          │
+ ┌────────▼────────┐
+ │   Per-Key JSON  │  Monthly rotation
+ │     Logger      │  Structured audit trail
+ └─────────────────┘
 ```
 
 ## Admin Dashboard
