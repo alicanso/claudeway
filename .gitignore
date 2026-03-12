@@ -6,3 +6,4 @@ docs/
 .worktrees/
 dashboard/dist/
 dashboard/node_modules/
+claudeway.toml

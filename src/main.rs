@@ -42,6 +42,7 @@ use session::SessionStore;
         handlers::session::continue_session,
         handlers::session::get_session,
         handlers::session::delete_session,
+        handlers::stream::create_task_stream,
     ),
     components(schemas(
         models::TokenUsage,
@@ -145,6 +146,8 @@ async fn main() -> anyhow::Result<()> {
             }),
         )
         .route("/task", post(handlers::task::create_task))
+        .route("/task/stream", post(handlers::stream::create_task_stream))
+        .route("/task/ws", get(handlers::stream::create_task_ws))
         .route("/session/start", post(handlers::session::start_session))
         .route(
             "/session/{id}",

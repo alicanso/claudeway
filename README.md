@@ -37,6 +37,8 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
   - [GET /health](#get-health)
   - [GET /models](#get-models)
   - [POST /task](#post-task)
+  - [POST /task/stream](#post-taskstream)
+  - [GET /task/ws](#get-taskws)
   - [Sessions](#sessions)
 - [Configuration](#configuration)
   - [API Keys](#api-keys)
@@ -297,6 +299,59 @@ curl -X POST http://localhost:3000/task \
 | `system_prompt` | string | — | System prompt override |
 | `workdir` | string | `$CLAUDE_WORKDIR` | Working directory for Claude |
 | `timeout_secs` | int | `120` | Max execution time |
+
+### `POST /task/stream`
+
+Same as `/task` but streams the response via Server-Sent Events. Sends `text` events with partial content as Claude generates it, then a final `done` event with the complete `TaskResponse`.
+
+```bash
+curl -N -X POST http://localhost:3000/task/stream \
+  -H "Authorization: Bearer sk-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Explain monads in one sentence"}'
+```
+```
+event: text
+data: A monad
+
+event: text
+data: A monad is a design pattern
+
+event: text
+data: A monad is a design pattern that chains operations...
+
+event: done
+data: {"session_id":"...","result":"A monad is a design pattern that chains operations...","success":true,"duration_ms":1832,"tokens":{"input":24,"output":156,"cache_read":0,"cache_write":0},"cost_usd":0.0021,"error":null}
+```
+
+Takes the same options as `/task`.
+
+### `GET /task/ws`
+
+WebSocket streaming endpoint. Connect with `Authorization` header, send a `TaskRequest` JSON as the first message, receive streaming updates.
+
+```js
+const ws = new WebSocket("ws://localhost:3000/task/ws", {
+  headers: { "Authorization": "Bearer sk-your-key" }
+});
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({ prompt: "Explain monads in one sentence" }));
+};
+
+ws.onmessage = (e) => {
+  const msg = JSON.parse(e.data);
+  if (msg.event === "text") console.log(msg.data);       // partial text
+  if (msg.event === "done") console.log(msg.data);       // final TaskResponse
+};
+```
+
+Message format:
+- `{"event":"text","data":"accumulated text so far"}`
+- `{"event":"done","data":{...TaskResponse}}`
+- `{"event":"error","data":"error message"}`
+
+Takes the same options as `/task`.
 
 ### Sessions
 

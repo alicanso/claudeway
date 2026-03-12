@@ -1,5 +1,8 @@
 use std::path::Path;
+use std::process::Stdio;
 use std::time::Instant;
+
+use tokio::io::AsyncBufReadExt;
 
 use crate::config::Config;
 use crate::error::{ApiError, AppError};
@@ -116,6 +119,171 @@ async fn run_claude(
     Ok(ClaudeResult {
         claude_session_id: session_id,
         result,
+        success,
+        exit_code,
+        duration_ms,
+        tokens,
+        cost_usd,
+    })
+}
+
+pub async fn run_task_streaming(
+    config: &Config,
+    prompt: &str,
+    model: Option<&str>,
+    system_prompt: Option<&str>,
+    workdir: &Path,
+    timeout_secs: u64,
+    text_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ClaudeResult, AppError> {
+    let mut args = vec![
+        "-p".to_string(),
+        prompt.to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+    ];
+
+    if let Some(m) = model {
+        args.push("--model".to_string());
+        args.push(resolve_model(m));
+    }
+
+    if let Some(sp) = system_prompt {
+        args.push("--system-prompt".to_string());
+        args.push(sp.to_string());
+    }
+
+    run_claude_streaming(config, &args, workdir, timeout_secs, text_tx).await
+}
+
+pub async fn run_resume_streaming(
+    config: &Config,
+    prompt: &str,
+    claude_session_id: &str,
+    workdir: &Path,
+    timeout_secs: u64,
+    text_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ClaudeResult, AppError> {
+    let args = vec![
+        "-p".to_string(),
+        prompt.to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--resume".to_string(),
+        claude_session_id.to_string(),
+    ];
+
+    run_claude_streaming(config, &args, workdir, timeout_secs, text_tx).await
+}
+
+async fn run_claude_streaming(
+    config: &Config,
+    args: &[String],
+    workdir: &Path,
+    timeout_secs: u64,
+    text_tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<ClaudeResult, AppError> {
+    let start = Instant::now();
+
+    let mut child = tokio::process::Command::new(&config.claude_bin)
+        .args(args)
+        .current_dir(workdir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| ApiError::internal(format!("Failed to spawn claude: {e}")))?;
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = tokio::io::BufReader::new(stdout).lines();
+
+    let mut accumulated_text = String::new();
+    let mut session_id: Option<String> = None;
+    let mut cost_usd: Option<f64> = None;
+    let mut is_error = false;
+
+    let stream_result = tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        async {
+            while let Some(line) = reader.next_line().await? {
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+
+                match event.get("type").and_then(|t| t.as_str()) {
+                    Some("content_block_delta") => {
+                        if let Some(text) = event
+                            .get("delta")
+                            .and_then(|d| d.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            accumulated_text.push_str(text);
+                            let _ = text_tx.send(accumulated_text.clone());
+                        }
+                    }
+                    Some("result") => {
+                        session_id = event
+                            .get("session_id")
+                            .and_then(|s| s.as_str())
+                            .map(String::from);
+                        cost_usd = event.get("cost_usd").and_then(|c| c.as_f64());
+                        is_error = event
+                            .get("is_error")
+                            .and_then(|e| e.as_bool())
+                            .unwrap_or(false);
+                        if let Some(r) = event.get("result").and_then(|r| r.as_str()) {
+                            accumulated_text = r.to_string();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok::<(), std::io::Error>(())
+        },
+    )
+    .await;
+
+    // Signal end of stream
+    drop(text_tx);
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    match stream_result {
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err(ApiError::timeout().into());
+        }
+        Ok(Err(e)) => {
+            return Err(ApiError::internal(format!("Stream read error: {e}")).into());
+        }
+        Ok(Ok(())) => {}
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| ApiError::internal(format!("Wait error: {e}")))?;
+
+    let exit_code = status.code();
+    let success = exit_code == Some(0) && !is_error;
+
+    let tokens = if let Some(ref sid) = session_id {
+        extract_tokens_from_jsonl(sid).await
+    } else {
+        None
+    };
+
+    Ok(ClaudeResult {
+        claude_session_id: session_id,
+        result: if accumulated_text.is_empty() {
+            None
+        } else {
+            Some(accumulated_text)
+        },
         success,
         exit_code,
         duration_ms,

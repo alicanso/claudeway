@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::claude;
 use crate::config::Config;
@@ -43,6 +44,17 @@ struct ForumTopicResult {
     message_thread_id: i64,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct SendMessageResponse {
+    ok: bool,
+    result: Option<SentMessage>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SentMessage {
+    message_id: i64,
+}
+
 pub struct SessionInfo {
     pub claude_session_id: Option<String>,
     pub workdir: PathBuf,
@@ -52,13 +64,14 @@ pub struct SessionInfo {
 pub type SessionMap = Arc<tokio::sync::Mutex<HashMap<i64, SessionInfo>>>;
 
 /// Send a text message to a Telegram chat, optionally in a specific thread.
+/// Returns the message_id of the sent message.
 pub async fn send_message(
     client: &reqwest::Client,
     bot_token: &str,
     chat_id: &str,
     thread_id: Option<i64>,
     text: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i64> {
     let url = format!("https://api.telegram.org/bot{bot_token}/sendMessage");
     let mut body = serde_json::json!({
         "chat_id": chat_id,
@@ -68,6 +81,29 @@ pub async fn send_message(
     if let Some(tid) = thread_id {
         body["message_thread_id"] = serde_json::json!(tid);
     }
+    let response = client.post(&url).json(&body).send().await?;
+    let parsed: SendMessageResponse = response.json().await?;
+    if !parsed.ok {
+        anyhow::bail!("sendMessage returned ok=false");
+    }
+    Ok(parsed.result.map(|r| r.message_id).unwrap_or(0))
+}
+
+/// Edit an existing message's text.
+async fn edit_message(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    message_id: i64,
+    text: &str,
+) -> anyhow::Result<()> {
+    let url = format!("https://api.telegram.org/bot{bot_token}/editMessageText");
+    let body = serde_json::json!({
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "HTML"
+    });
     client.post(&url).json(&body).send().await?;
     Ok(())
 }
@@ -240,7 +276,6 @@ async fn handle_message(
             }
             Err(e) => {
                 tracing::error!("failed to create forum topic: {e}");
-                // Send error to main chat as fallback
                 let _ = send_message(client, bot_token, chat_id, None, &format!("Failed to create topic: {e}")).await;
                 return;
             }
@@ -254,7 +289,6 @@ async fn handle_message(
             map.remove(&effective_thread_id);
         }
         let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), "Session closed.").await;
-        // Small delay so the message is visible before topic is deleted
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if let Err(e) = delete_forum_topic(client, bot_token, chat_id, effective_thread_id).await {
             tracing::error!("failed to delete forum topic: {e}");
@@ -262,7 +296,7 @@ async fn handle_message(
         return;
     }
 
-    // Start typing indicator refresh (every 4s)
+    // Start typing indicator (runs until first streamed message or claude finishes)
     let typing_client = client.clone();
     let typing_token = bot_token.to_string();
     let typing_chat = chat_id.to_string();
@@ -273,22 +307,99 @@ async fn handle_message(
         }
     });
 
-    let result = handle_topic_message(prompt, effective_thread_id, config, sessions).await;
+    // Create streaming channel
+    let (text_tx, text_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+    // Spawn streaming update handler (sends/edits Telegram messages as text arrives)
+    let stream_client = client.clone();
+    let stream_token = bot_token.to_string();
+    let stream_chat = chat_id.to_string();
+    let stream_handle = tokio::spawn(async move {
+        handle_streaming_updates(
+            &stream_client,
+            &stream_token,
+            &stream_chat,
+            effective_thread_id,
+            text_rx,
+        )
+        .await
+    });
+
+    // Run Claude with streaming
+    let result = handle_topic_message(prompt, effective_thread_id, config, sessions, text_tx).await;
 
     // Stop typing indicator
     typing_handle.abort();
+
+    // Wait for streaming handler to finish, get message IDs it created
+    let sent_message_ids = stream_handle.await.unwrap_or_default();
 
     let response_text = match result {
         Ok(text) => text,
         Err(e) => format!("Error: {e}"),
     };
 
+    // Final update — ensure complete text is displayed correctly
     let chunks = markdown::split_and_convert(&response_text);
-    for chunk in chunks {
-        if let Err(e) = send_message(client, bot_token, chat_id, Some(effective_thread_id), &chunk).await {
-            tracing::error!("failed to send telegram message: {e}");
+    for (i, chunk) in chunks.iter().enumerate() {
+        if i < sent_message_ids.len() {
+            // Edit existing streaming message with final content
+            let _ = edit_message(client, bot_token, chat_id, sent_message_ids[i], chunk).await;
+        } else {
+            // Send additional messages for remaining chunks
+            let _ = send_message(client, bot_token, chat_id, Some(effective_thread_id), chunk).await;
         }
     }
+}
+
+/// Process streaming text updates from Claude and push them to Telegram via send/edit.
+/// Returns the message IDs of all messages created during streaming.
+async fn handle_streaming_updates(
+    client: &reqwest::Client,
+    bot_token: &str,
+    chat_id: &str,
+    thread_id: i64,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+) -> Vec<i64> {
+    let mut message_ids: Vec<i64> = Vec::new();
+    let mut last_text = String::new();
+    let debounce = Duration::from_millis(1000);
+
+    while let Some(text) = rx.recv().await {
+        // Drain channel to get the latest accumulated text
+        let mut latest = text;
+        while let Ok(newer) = rx.try_recv() {
+            latest = newer;
+        }
+
+        if latest == last_text {
+            continue;
+        }
+        last_text.clone_from(&latest);
+
+        let chunks = markdown::split_and_convert(&latest);
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            if i < message_ids.len() {
+                // Only edit the last (still-growing) chunk
+                if i == chunks.len() - 1 {
+                    let _ = edit_message(client, bot_token, chat_id, message_ids[i], chunk).await;
+                }
+            } else {
+                // New chunk needed — send a new message
+                match send_message(client, bot_token, chat_id, Some(thread_id), chunk) .await
+                {
+                    Ok(mid) => message_ids.push(mid),
+                    Err(e) => tracing::error!("failed to send streaming chunk: {e}"),
+                }
+            }
+        }
+
+        // Debounce to avoid Telegram rate limits
+        tokio::time::sleep(debounce).await;
+    }
+
+    message_ids
 }
 
 async fn handle_topic_message(
@@ -296,6 +407,7 @@ async fn handle_topic_message(
     thread_id: i64,
     config: &Config,
     sessions: &SessionMap,
+    text_tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> anyhow::Result<String> {
     // Get or create session + acquire per-topic lock
     let topic_lock = {
@@ -325,9 +437,9 @@ async fn handle_topic_message(
     tokio::fs::create_dir_all(&workdir).await?;
 
     let claude_result = if let Some(ref sid) = claude_session_id {
-        claude::run_resume(config, prompt, sid, &workdir, 600).await
+        claude::run_resume_streaming(config, prompt, sid, &workdir, 600, text_tx).await
     } else {
-        claude::run_task(config, prompt, None, None, &workdir, 600).await
+        claude::run_task_streaming(config, prompt, None, None, &workdir, 600, text_tx).await
     };
 
     match claude_result {
