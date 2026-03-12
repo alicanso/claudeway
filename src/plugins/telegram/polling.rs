@@ -440,7 +440,7 @@ async fn handle_topic_message(
         tracing::info!(thread_id, session_id = %sid, "resuming Claude session");
         claude::run_resume_streaming(config, prompt, sid, &workdir, 600, text_tx).await
     } else {
-        tracing::info!(thread_id, "starting new Claude session (no stored session_id)");
+        tracing::info!(thread_id, "starting new Claude session");
         claude::run_task_streaming(config, prompt, None, None, &workdir, 600, text_tx).await
     };
 
