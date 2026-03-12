@@ -41,11 +41,13 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 - [Configuration](#configuration)
   - [API Keys](#api-keys)
   - [Config File](#config-file)
-  - [Plugin System](#plugin-system)
+- [Plugins](#plugins)
+  - [Dashboard](#dashboard)
+  - [Swagger UI](#swagger-ui)
+  - [Disabling Plugins](#disabling-plugins)
 - [Logging](#logging)
 - [Performance](#performance)
 - [Architecture](#architecture)
-- [Admin Dashboard](#admin-dashboard)
 - [Deployment](#deployment)
 - [Error Responses](#error-responses)
 - [License](#license)
@@ -75,9 +77,23 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 
 ```bash
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/alicanso/claudeway/releases/download/v0.2.0/claudeway-aarch64-apple-darwin -o claudeway
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-aarch64-apple-darwin -o claudeway
+
+# macOS (Intel)
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-apple-darwin -o claudeway
+
+# Linux (x86_64)
+curl -fsSL https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-unknown-linux-musl -o claudeway
+
+# Then run
 chmod +x claudeway
 ./claudeway
+```
+
+Windows:
+```powershell
+Invoke-WebRequest -Uri https://github.com/alicanso/claudeway/releases/latest/download/claudeway-x86_64-pc-windows-msvc.exe -OutFile claudeway.exe
+.\claudeway.exe
 ```
 
 On startup you'll see:
@@ -361,30 +377,67 @@ enabled = true
 
 Precedence: **defaults → config file → CLI flags** (last wins).
 
-### Plugin System
+## Plugins
 
-Claudeway uses a plugin-based architecture. Features like the admin dashboard and Swagger UI are implemented as plugins that register HTTP routes and subscribe to gateway events.
+Claudeway is built on a plugin architecture. Each plugin is compiled in via a Cargo feature flag and can be disabled at runtime.
 
-**Compiled-in plugins:**
+### Dashboard
 
-| Plugin | Feature Flag | Description |
-|--------|-------------|-------------|
-| `dashboard` | `--features dashboard` | Admin dashboard with sessions, logs, costs, and key stats |
-| `swagger` | `--features swagger` | Swagger UI at `/docs` with OpenAPI 3.1 spec |
-
-Plugins are enabled by default when compiled in. Disable them at runtime:
+Built-in admin dashboard — a Svelte SPA embedded directly in the binary. Open `http://localhost:3000/dashboard` and log in with the **first API key** (the admin key).
 
 ```bash
-# Via config file
+cargo build --release --features dashboard
+```
+
+| Page | Description |
+|------|-------------|
+| **Overview** | Uptime, total requests, active sessions, cost summary, daily cost/request chart, model usage breakdown |
+| **Sessions** | Paginated list with model, task count, cost. Click into any session for full detail |
+| **Logs** | Real-time log viewer with 5-second polling. Filter by key ID |
+| **Keys** | Per-key usage stats — total requests and total cost for each API key |
+| **Costs** | Cost analytics with daily/weekly/monthly grouping, stacked model charts, per-key bar charts |
+
+The dashboard uses a cookie-authenticated admin API under `/admin`:
+
+```bash
+# Login (returns session cookie)
+curl -X POST http://localhost:3000/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"key": "sk-your-admin-key"}' -c cookies.txt
+
+# Use authenticated endpoints
+curl -b cookies.txt http://localhost:3000/admin/overview
+curl -b cookies.txt http://localhost:3000/admin/sessions
+curl -b cookies.txt http://localhost:3000/admin/logs
+curl -b cookies.txt http://localhost:3000/admin/keys
+curl -b cookies.txt http://localhost:3000/admin/costs?group_by=weekly
+```
+
+Admin key = first key in your `--keys` list. Sessions expire after 1 hour.
+
+### Swagger UI
+
+Auto-generated OpenAPI 3.1 spec served at `/docs`.
+
+```bash
+cargo build --release --features swagger
+```
+
+### Disabling Plugins
+
+Plugins compiled in are enabled by default. Disable at runtime:
+
+```bash
+# Via CLI
+claudeway --disable-plugin swagger
+claudeway --disable-plugin dashboard,swagger
+
+# Via config file (claudeway.toml)
 # [plugins.swagger]
 # enabled = false
-
-# Via CLI flag
-claudeway --disable-plugin swagger
-
-# Disable multiple
-claudeway --disable-plugin dashboard,swagger
 ```
+
+Build without a feature to exclude it entirely — no extra binary size.
 
 ## Logging
 
@@ -472,62 +525,9 @@ The bottleneck is always Claude, never Claudeway.
  └─────────────────┘
 ```
 
-## Admin Dashboard
-
-Claudeway includes an optional built-in admin dashboard — a Svelte SPA embedded directly in the binary. Enable it with the `dashboard` feature flag:
-
-```bash
-cargo build --release --features dashboard
-```
-
-Then open `http://localhost:3000/dashboard` in your browser. Log in with the **first API key** (the admin key).
-
-### Features
-
-| Page | Description |
-|------|-------------|
-| **Overview** | Uptime, total requests, active sessions, cost summary, daily cost/request chart, model usage breakdown |
-| **Sessions** | Paginated list of all sessions with model, task count, cost. Click into any session for full detail. |
-| **Logs** | Real-time log viewer with 5-second polling. Filter by key ID. |
-| **Keys** | Per-key usage stats — total requests and total cost for each API key |
-| **Costs** | Cost analytics with daily/weekly/monthly grouping, stacked model charts, per-key bar charts |
-
-### Admin API
-
-The dashboard uses a cookie-authenticated admin API under `/admin`. These endpoints are also available directly:
-
-```bash
-# Login (returns session cookie)
-curl -X POST http://localhost:3000/admin/login \
-  -H "Content-Type: application/json" \
-  -d '{"key": "sk-your-admin-key"}' -c cookies.txt
-
-# Use authenticated endpoints
-curl -b cookies.txt http://localhost:3000/admin/overview
-curl -b cookies.txt http://localhost:3000/admin/sessions
-curl -b cookies.txt http://localhost:3000/admin/logs
-curl -b cookies.txt http://localhost:3000/admin/keys
-curl -b cookies.txt http://localhost:3000/admin/costs?group_by=weekly
-```
-
-The admin key is the **first key** in your `--keys` list. Sessions expire after 1 hour.
-
-> **Note:** The dashboard is fully optional. Building without `--features dashboard` produces the same binary as before — no Node.js dependency, no extra size.
-
 ## Deployment
 
-For production deployments:
-
 ```bash
-# Optimized release build (~3 MB)
-cargo build --release
-
-# With admin dashboard
-cargo build --release --features dashboard
-
-# With Swagger UI at /docs
-cargo build --release --features swagger
-
 # All features
 cargo build --release --features "dashboard,swagger"
 
