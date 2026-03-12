@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::error::ApiError;
 use crate::logging::ClaudeInvocationLog;
 use crate::models::{
-    DeleteSessionResponse, SessionContinueRequest, SessionInfoResponse, SessionStartRequest,
-    SessionStartResponse, TaskResponse, TokenUsage,
+    ApprovePermissionsRequest, DeleteSessionResponse, SessionContinueRequest, SessionInfoResponse,
+    SessionStartRequest, SessionStartResponse, TaskResponse, TokenUsage,
 };
 use crate::plugin::{GatewayEvent, PluginContext};
 use crate::session::{SessionMeta, SessionStore};
@@ -323,5 +323,124 @@ pub async fn delete_session(
     Ok(Json(DeleteSessionResponse {
         deleted: true,
         session_id: session_id.to_string(),
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/session/{id}/approve",
+    tag = "Sessions",
+    summary = "Approve denied permissions",
+    description = "Approve previously denied tool calls and resume the session with --dangerously-skip-permissions.",
+    security(("bearer" = [])),
+    params(("id" = String, Path, description = "Session UUID")),
+    request_body = ApprovePermissionsRequest,
+    responses(
+        (status = 200, description = "Approved and resumed", body = TaskResponse),
+        (status = 400, description = "Bad request", body = crate::error::ApiError),
+        (status = 404, description = "Session not found", body = crate::error::ApiError),
+    )
+)]
+#[allow(clippy::too_many_arguments)]
+pub async fn approve_permissions(
+    Extension(key_id): Extension<KeyId>,
+    Extension(request_counter): Extension<Arc<AtomicU64>>,
+    Extension(config): Extension<Arc<Config>>,
+    Extension(store): Extension<Arc<SessionStore>>,
+    Extension(logger): Extension<Arc<crate::logging::KeyLogger>>,
+    Extension(plugin_ctx): Extension<PluginContext>,
+    Path(id): Path<String>,
+    Json(body): Json<ApprovePermissionsRequest>,
+) -> Result<Json<TaskResponse>, crate::error::AppError> {
+    request_counter.fetch_add(1, Ordering::Relaxed);
+
+    let session_id = Uuid::parse_str(&id)
+        .map_err(|_| ApiError::bad_request("Invalid session ID format"))?;
+
+    if body.tool_use_ids.is_empty() {
+        return Err(ApiError::bad_request("tool_use_ids cannot be empty").into());
+    }
+
+    let session = store
+        .get(&session_id)
+        .ok_or_else(|| ApiError::not_found("Session not found"))?;
+
+    let lock = store
+        .get_lock(&session_id)
+        .ok_or_else(|| ApiError::not_found("Session not found"))?;
+
+    let _guard = lock.lock().await;
+
+    let claude_session_id = session.claude_session_id.as_ref()
+        .ok_or_else(|| ApiError::bad_request("Session has no Claude session to resume"))?;
+
+    tracing::info!(
+        key_id = %key_id.0,
+        session_id = %session_id,
+        tool_use_ids = ?body.tool_use_ids,
+        "Permission approval granted"
+    );
+
+    let claude_result = claude::run_resume(
+        &config,
+        "Please proceed with the previously denied tool calls.",
+        claude_session_id,
+        &session.workdir,
+        600,
+        true, // force_bypass
+    ).await?;
+
+    // Update session metadata
+    store.update(&session_id, |meta| {
+        if let Some(tokens) = &claude_result.tokens {
+            meta.tokens.accumulate(tokens);
+        }
+        if let Some(cost) = claude_result.cost_usd {
+            meta.cost_usd += cost;
+        }
+        meta.task_count += 1;
+        meta.last_used = Utc::now();
+        if meta.claude_session_id.is_none() {
+            meta.claude_session_id = claude_result.claude_session_id.clone();
+        }
+    });
+
+    // Log the invocation
+    let log_entry = ClaudeInvocationLog {
+        timestamp: Utc::now().to_rfc3339(),
+        level: "INFO",
+        key_id: key_id.0.clone(),
+        session_id: session_id.to_string(),
+        model: session.model.clone(),
+        exit_code: claude_result.exit_code,
+        duration_ms: claude_result.duration_ms,
+        success: claude_result.success,
+        tokens: claude_result.tokens.clone(),
+        cost_usd: claude_result.cost_usd,
+        message: format!("Permission approval for session {}", session_id),
+    };
+    logger.log_claude_invocation(&log_entry);
+
+    // Emit event
+    if let Some(ref tokens) = claude_result.tokens {
+        plugin_ctx.emit(GatewayEvent::SessionCompleted {
+            session_id: session_id.to_string(),
+            token_usage: tokens.clone(),
+        });
+    }
+
+    Ok(Json(TaskResponse {
+        session_id: session_id.to_string(),
+        result: claude_result.result.clone(),
+        success: claude_result.success,
+        duration_ms: claude_result.duration_ms,
+        tokens: claude_result.tokens,
+        cost_usd: claude_result.cost_usd,
+        error: if !claude_result.success {
+            claude_result.result
+        } else {
+            None
+        },
+        permission_denials: claude_result.permission_denials,
     }))
 }

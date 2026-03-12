@@ -42,6 +42,7 @@ use session::SessionStore;
         handlers::session::continue_session,
         handlers::session::get_session,
         handlers::session::delete_session,
+        handlers::session::approve_permissions,
         handlers::stream::create_task_stream,
         handlers::stream::create_task_ws,
     ),
@@ -57,6 +58,8 @@ use session::SessionStore;
         models::SessionContinueRequest,
         models::SessionInfoResponse,
         models::DeleteSessionResponse,
+        models::PermissionDenial,
+        models::ApprovePermissionsRequest,
         error::ApiError,
     )),
     tags(
@@ -156,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
                 .get(handlers::session::get_session)
                 .delete(handlers::session::delete_session),
         )
+        .route("/session/{id}/approve", post(handlers::session::approve_permissions))
         .layer(middleware::from_fn(move |req, next| {
             let keys = api_keys.clone();
             auth::auth_middleware(req, next, keys)
