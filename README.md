@@ -43,6 +43,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
 - [Logging](#logging)
 - [Performance](#performance)
 - [Architecture](#architecture)
+- [Admin Dashboard](#admin-dashboard)
 - [Deployment](#deployment)
 - [Error Responses](#error-responses)
 - [License](#license)
@@ -63,6 +64,7 @@ Claudeway wraps it in a **zero-overhead Rust HTTP server** and gives you:
 | **Per-key audit logs** | Monthly rotating JSONL files per API key |
 | **Zero-copy performance** | Axum + Tokio + DashMap. No GC pauses. No runtime overhead. |
 | **Type-safe OpenAPI** | Auto-generated OpenAPI 3.1 spec + Swagger UI at `/docs` |
+| **Admin dashboard** | Optional built-in Svelte SPA with real-time logs, cost charts, and session management |
 | **Deploy anywhere** | Single static binary. Alpine Docker image. Zero config to start. |
 
 ## Quick Start
@@ -228,9 +230,9 @@ find ./src -name "*.py" | xargs -P 4 -I {} sh -c '
 '
 ```
 
-### Cost Tracking Dashboard
+### Cost Tracking
 
-Monitor usage and cost across all sessions.
+Monitor usage and cost per session via the API or the [admin dashboard](#admin-dashboard).
 
 ```bash
 # Get cost for a specific session
@@ -240,17 +242,6 @@ curl -s -H "Authorization: Bearer $CLAUDEWAY_KEY" \
     total_tokens: (.tokens.input + .tokens.output),
     cost_usd
   }'
-
-# Parse daily costs from logs
-cat logs/admin/2026-03.log | jq -s '
-  group_by(.timestamp[:10]) |
-  map({
-    date: .[0].timestamp[:10],
-    requests: length,
-    total_cost: (map(.cost_usd) | add),
-    total_tokens: (map(.tokens.input + .tokens.output) | add)
-  })
-'
 ```
 
 ## API Reference
@@ -462,6 +453,48 @@ The bottleneck is always Claude, never Claudeway.
    └─────────────────┘
 ```
 
+## Admin Dashboard
+
+Claudeway includes an optional built-in admin dashboard — a Svelte SPA embedded directly in the binary. Enable it with the `dashboard` feature flag:
+
+```bash
+cargo build --release --features dashboard
+```
+
+Then open `http://localhost:3000/dashboard` in your browser. Log in with the **first API key** (the admin key).
+
+### Features
+
+| Page | Description |
+|------|-------------|
+| **Overview** | Uptime, total requests, active sessions, cost summary, daily cost/request chart, model usage breakdown |
+| **Sessions** | Paginated list of all sessions with model, task count, cost. Click into any session for full detail. |
+| **Logs** | Real-time log viewer with 5-second polling. Filter by key ID. |
+| **Keys** | Per-key usage stats — total requests and total cost for each API key |
+| **Costs** | Cost analytics with daily/weekly/monthly grouping, stacked model charts, per-key bar charts |
+
+### Admin API
+
+The dashboard uses a cookie-authenticated admin API under `/admin`. These endpoints are also available directly:
+
+```bash
+# Login (returns session cookie)
+curl -X POST http://localhost:3000/admin/login \
+  -H "Content-Type: application/json" \
+  -d '{"key": "sk-your-admin-key"}' -c cookies.txt
+
+# Use authenticated endpoints
+curl -b cookies.txt http://localhost:3000/admin/overview
+curl -b cookies.txt http://localhost:3000/admin/sessions
+curl -b cookies.txt http://localhost:3000/admin/logs
+curl -b cookies.txt http://localhost:3000/admin/keys
+curl -b cookies.txt http://localhost:3000/admin/costs?group_by=weekly
+```
+
+The admin key is the **first key** in your `--keys` list. Sessions expire after 1 hour.
+
+> **Note:** The dashboard is fully optional. Building without `--features dashboard` produces the same binary as before — no Node.js dependency, no extra size.
+
 ## Deployment
 
 For production deployments:
@@ -470,8 +503,14 @@ For production deployments:
 # Optimized release build (~3 MB)
 cargo build --release
 
-# With Swagger UI at /docs (~14 MB)
+# With admin dashboard
+cargo build --release --features dashboard
+
+# With Swagger UI at /docs
 cargo build --release --features swagger
+
+# All features
+cargo build --release --features "dashboard,swagger"
 
 # Docker Compose
 cp .env.example .env    # edit with your keys
