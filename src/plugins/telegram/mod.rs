@@ -1,5 +1,6 @@
 pub mod markdown;
 pub mod polling;
+pub mod repos;
 
 use crate::plugin::{EventType, GatewayEvent, Plugin, PluginContext, PluginRegistrar};
 use std::collections::HashMap;
