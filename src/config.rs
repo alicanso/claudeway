@@ -18,13 +18,10 @@ impl Config {
 
         let claude_bin = env::var("CLAUDE_BIN").unwrap_or_else(|_| "claude".to_string());
 
-        let claude_workdir = env::var("CLAUDE_WORKDIR").unwrap_or_else(|_| {
-            dirs_next::home_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| "/tmp".to_string())
-        });
+        let claude_workdir =
+            env::var("CLAUDE_WORKDIR").unwrap_or_else(|_| "/tmp/claude-tasks".to_string());
 
-        let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "/tmp/claudeway/logs".to_string());
+        let log_dir = env::var("LOG_DIR").unwrap_or_else(|_| "./logs".to_string());
 
         let port: u16 = env::var("PORT")
             .unwrap_or_else(|_| "3000".to_string())
