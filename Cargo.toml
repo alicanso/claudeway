@@ -30,6 +30,8 @@ utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 rust-embed = { version = "8", optional = true }
 mime_guess = { version = "2", optional = true }
+toml_crate = { package = "toml", version = "0.8" }
+trait-variant = "0.1"
 
 [features]
 default = []
