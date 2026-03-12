@@ -43,6 +43,7 @@ use session::SessionStore;
         handlers::session::get_session,
         handlers::session::delete_session,
         handlers::stream::create_task_stream,
+        handlers::stream::create_task_ws,
     ),
     components(schemas(
         models::TokenUsage,

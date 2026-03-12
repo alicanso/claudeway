@@ -162,12 +162,18 @@ pub async fn create_task_stream(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
-/// WebSocket streaming endpoint.
-///
-/// 1. Client connects: `GET /task/ws` with `Authorization` header
-/// 2. Client sends first message: `TaskRequest` JSON
-/// 3. Server streams back `{"event":"text","data":"..."}` messages
-/// 4. Server sends final `{"event":"done","data":{TaskResponse}}` and closes
+#[utoipa::path(
+    get,
+    path = "/task/ws",
+    tag = "Tasks",
+    summary = "Run a task with WebSocket streaming",
+    description = "Upgrade to a WebSocket connection for bidirectional streaming. Send a TaskRequest JSON as the first message. The server streams back `{\"event\":\"text\",\"data\":\"...\"}` messages with partial content, and a final `{\"event\":\"done\",\"data\":{TaskResponse}}` message before closing.",
+    security(("bearer" = [])),
+    responses(
+        (status = 101, description = "WebSocket upgrade"),
+        (status = 401, description = "Unauthorized", body = crate::error::ApiError)
+    )
+)]
 pub async fn create_task_ws(
     ws: WebSocketUpgrade,
     Extension(key_id): Extension<KeyId>,
