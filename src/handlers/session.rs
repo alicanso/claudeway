@@ -108,6 +108,7 @@ pub async fn start_session(
         (status = 408, description = "Timeout", body = crate::error::ApiError)
     )
 )]
+#[allow(clippy::too_many_arguments)]
 pub async fn continue_session(
     Extension(key_id): Extension<KeyId>,
     Extension(request_counter): Extension<Arc<AtomicU64>>,

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use axum::Router;
 use std::collections::HashMap;
 use std::future::Future;
@@ -110,8 +112,10 @@ impl GatewayEvent {
 // so no concurrent mutation concerns. emit() is called from handlers concurrently
 // but only reads the subscriber map.
 
+type PluginEntry = (String, Arc<dyn Plugin>);
+
 pub struct EventBus {
-    subscribers: HashMap<EventType, Vec<(String, Arc<dyn Plugin>)>>,
+    subscribers: HashMap<EventType, Vec<PluginEntry>>,
 }
 
 impl EventBus {

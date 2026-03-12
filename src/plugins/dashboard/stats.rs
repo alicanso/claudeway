@@ -32,10 +32,12 @@ pub fn get_models_breakdown(log_dir: &Path) -> Vec<ModelBreakdown> {
         .collect()
 }
 
+// (total_cost, request_count, by_model(count, cost), by_key(cost))
+type CostBucket = (f64, u64, HashMap<String, (u64, f64)>, HashMap<String, f64>);
+
 /// Aggregate costs by period (daily/weekly/monthly)
 pub fn aggregate_costs(log_dir: &Path, group_by: &str) -> Vec<CostEntry> {
-    let mut cost_map: BTreeMap<String, (f64, u64, HashMap<String, (u64, f64)>, HashMap<String, f64>)> =
-        BTreeMap::new();
+    let mut cost_map: BTreeMap<String, CostBucket> = BTreeMap::new();
     walk_log_entries(log_dir, |value, key_id| {
         let cost = value
             .get("cost_usd")

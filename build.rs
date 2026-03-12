@@ -19,8 +19,9 @@ fn main() {
                 .ok();
 
             let needs_rebuild = walkdir(&src_dir)
-                .map(|src_mtime| {
-                    dist_mtime.map_or(true, |d| src_mtime > d)
+                .map(|src_mtime| match dist_mtime {
+                    Some(d) => src_mtime > d,
+                    None => true,
                 })
                 .unwrap_or(true);
 
@@ -66,10 +67,10 @@ fn walkdir(dir: &std::path::Path) -> Option<std::time::SystemTime> {
                 if let Some(t) = walkdir(&path) {
                     latest = Some(latest.map_or(t, |l: std::time::SystemTime| l.max(t)));
                 }
-            } else if let Ok(meta) = std::fs::metadata(&path) {
-                if let Ok(mtime) = meta.modified() {
-                    latest = Some(latest.map_or(mtime, |l: std::time::SystemTime| l.max(mtime)));
-                }
+            } else if let Ok(meta) = std::fs::metadata(&path)
+                && let Ok(mtime) = meta.modified()
+            {
+                latest = Some(latest.map_or(mtime, |l: std::time::SystemTime| l.max(mtime)));
             }
         }
     }

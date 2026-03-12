@@ -1,6 +1,6 @@
 use axum::extract::{Extension, Path, Query};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -147,10 +147,11 @@ pub async fn get_logs(
                 let line = line.trim();
                 if line.is_empty() { continue; }
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
-                    if let Some(ref after) = query.after {
-                        if let Some(ts) = value.get("timestamp").and_then(|v| v.as_str()) {
-                            if ts <= after.as_str() { continue; }
-                        }
+                    if let Some(ref after) = query.after
+                        && let Some(ts) = value.get("timestamp").and_then(|v| v.as_str())
+                        && ts <= after.as_str()
+                    {
+                        continue;
                     }
                     entries.push(value);
                 }
