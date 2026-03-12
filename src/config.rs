@@ -1,6 +1,7 @@
 use clap::Parser;
 use rand::Rng;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// Claudeway — HTTP gateway for the Claude CLI
 #[derive(Parser, Debug)]
@@ -29,6 +30,14 @@ struct Cli {
     /// Log level (trace, debug, info, warn, error)
     #[arg(long, env = "LOG_LEVEL", default_value = "info")]
     log_level: String,
+
+    /// Path to config file (claudeway.toml)
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Disable specific plugins (overrides config file)
+    #[arg(long, value_delimiter = ',')]
+    disable_plugin: Vec<String>,
 }
 
 pub struct Config {
@@ -41,6 +50,8 @@ pub struct Config {
     pub log_level: String,
     /// If a key was auto-generated, this holds the secret so we can print it at startup.
     pub generated_key: Option<String>,
+    pub config_path: Option<PathBuf>,
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Config {
@@ -69,6 +80,8 @@ impl Config {
             port: cli.port,
             log_level: cli.log_level,
             generated_key,
+            config_path: cli.config,
+            disabled_plugins: cli.disable_plugin,
         })
     }
 
@@ -157,6 +170,56 @@ fn generate_secret() -> String {
     format!("sk-{hex}")
 }
 
+/// Config loaded from claudeway.toml file
+#[derive(serde::Deserialize, Default)]
+pub struct PluginConfig {
+    #[serde(default)]
+    pub plugins: HashMap<String, toml_crate::Value>,
+}
+
+impl PluginConfig {
+    /// Load from file path, or return default if no config file found
+    pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+        let config_path = match path {
+            Some(p) => {
+                if p.exists() {
+                    Some(p.to_path_buf())
+                } else {
+                    return Err(anyhow::anyhow!("Config file not found: {}", p.display()));
+                }
+            }
+            None => {
+                let default_path = PathBuf::from("claudeway.toml");
+                if default_path.exists() {
+                    Some(default_path)
+                } else {
+                    None
+                }
+            }
+        };
+
+        match config_path {
+            Some(path) => {
+                let content = std::fs::read_to_string(&path)?;
+                let config: PluginConfig = toml_crate::from_str(&content)?;
+                Ok(config)
+            }
+            None => Ok(PluginConfig::default()),
+        }
+    }
+
+    pub fn is_plugin_enabled(&self, name: &str, disabled_plugins: &[String]) -> bool {
+        if disabled_plugins.iter().any(|d| d == name) {
+            return false;
+        }
+        self.plugins
+            .get(name)
+            .and_then(|v| v.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true) // enabled by default if compiled in
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,5 +273,38 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert_eq!(keys.get("val1").unwrap(), "id1");
         assert_eq!(keys.get("val2").unwrap(), "id2");
+    }
+
+    #[test]
+    fn test_plugin_config_default_enabled() {
+        let config = PluginConfig::default();
+        assert!(config.is_plugin_enabled("dashboard", &[]));
+    }
+
+    #[test]
+    fn test_plugin_config_disabled_by_cli() {
+        let config = PluginConfig::default();
+        let disabled = vec!["dashboard".to_string()];
+        assert!(!config.is_plugin_enabled("dashboard", &disabled));
+    }
+
+    #[test]
+    fn test_plugin_config_disabled_in_file() {
+        let toml_str = r#"
+            [plugins.dashboard]
+            enabled = false
+        "#;
+        let config: PluginConfig = toml_crate::from_str(toml_str).unwrap();
+        assert!(!config.is_plugin_enabled("dashboard", &[]));
+    }
+
+    #[test]
+    fn test_plugin_config_enabled_in_file() {
+        let toml_str = r#"
+            [plugins.swagger]
+            enabled = true
+        "#;
+        let config: PluginConfig = toml_crate::from_str(toml_str).unwrap();
+        assert!(config.is_plugin_enabled("swagger", &[]));
     }
 }
