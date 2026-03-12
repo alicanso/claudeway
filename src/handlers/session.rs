@@ -18,7 +18,7 @@ use crate::session::{SessionMeta, SessionStore};
 
 /// Start a new session
 pub async fn start_session(
-    Extension(key_id): Extension<KeyId>,
+    Extension(_key_id): Extension<KeyId>,
     Extension(config): Extension<Arc<Config>>,
     Extension(store): Extension<Arc<SessionStore>>,
     Json(req): Json<SessionStartRequest>,
