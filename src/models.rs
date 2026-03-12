@@ -21,6 +21,18 @@ impl TokenUsage {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct PermissionDenial {
+    pub tool_name: String,
+    pub tool_use_id: String,
+    pub tool_input: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ApprovePermissionsRequest {
+    pub tool_use_ids: Vec<String>,
+}
+
 // --- Health ---
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -63,6 +75,8 @@ pub struct TaskResponse {
     pub tokens: Option<TokenUsage>,
     pub cost_usd: Option<f64>,
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub permission_denials: Vec<PermissionDenial>,
 }
 
 // --- Session ---
@@ -118,6 +132,8 @@ pub struct ClaudeCliOutput {
     pub duration_ms: Option<u64>,
     #[serde(rename = "isError")]
     pub is_error: Option<bool>,
+    #[serde(default)]
+    pub permission_denials: Vec<PermissionDenial>,
 }
 
 #[derive(Debug, Deserialize)]

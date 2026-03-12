@@ -6,7 +6,7 @@ use tokio::io::AsyncBufReadExt;
 
 use crate::config::Config;
 use crate::error::{ApiError, AppError};
-use crate::models::{ClaudeCliOutput, SessionJSONLEntry, TokenUsage};
+use crate::models::{ClaudeCliOutput, PermissionDenial, SessionJSONLEntry, TokenUsage};
 
 #[derive(Debug)]
 pub struct ClaudeResult {
@@ -17,6 +17,7 @@ pub struct ClaudeResult {
     pub duration_ms: u64,
     pub tokens: Option<TokenUsage>,
     pub cost_usd: Option<f64>,
+    pub permission_denials: Vec<PermissionDenial>,
 }
 
 pub async fn run_task(
@@ -75,10 +76,16 @@ async fn run_claude(
 ) -> Result<ClaudeResult, AppError> {
     let start = Instant::now();
 
+    let mut full_args = Vec::new();
+    if config.bypass_permissions {
+        full_args.push("--dangerously-skip-permissions".to_string());
+    }
+    full_args.extend_from_slice(args);
+
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         tokio::process::Command::new(&config.claude_bin)
-            .args(args)
+            .args(&full_args)
             .current_dir(workdir)
             .env_remove("CLAUDECODE")
             .output(),
@@ -190,8 +197,14 @@ async fn run_claude_streaming(
 ) -> Result<ClaudeResult, AppError> {
     let start = Instant::now();
 
+    let mut full_args = Vec::new();
+    if config.bypass_permissions {
+        full_args.push("--dangerously-skip-permissions".to_string());
+    }
+    full_args.extend_from_slice(args);
+
     let mut child = tokio::process::Command::new(&config.claude_bin)
-        .args(args)
+        .args(&full_args)
         .current_dir(workdir)
         .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
