@@ -341,6 +341,7 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `--config` | — | `./claudeway.toml` | Path to config file |
 | `--enable-plugin` | — | — | Enable plugins by name (comma-separated) |
 | `--disable-plugin` | — | — | Disable plugins by name (comma-separated) |
+| `-f, --force` | — | — | Skip interactive prompts |
 
 ### API Keys
 

@@ -19,6 +19,7 @@ mod models;
 mod session;
 mod plugin;
 mod plugins;
+mod startup;
 
 use config::Config;
 use handlers::models::ModelsCache;
@@ -68,17 +69,16 @@ pub(crate) struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let config = Config::load()?;
+    let mut config = Config::load()?;
 
-    if let Some(ref key) = config.generated_key {
-        eprintln!();
-        eprintln!("  No API keys configured — generated one for you:");
-        eprintln!();
-        eprintln!("    {key}");
-        eprintln!();
-        eprintln!("  Use it as: curl -H \"Authorization: Bearer {key}\" http://localhost:{}/task", config.port);
-        eprintln!("  To set your own keys, use --keys or WRAPPER_KEYS env var.");
-        eprintln!();
+    // Interactive plugin setup on first run (no config file, no --force)
+    if let Some(selected) = startup::interactive_setup(&config) {
+        // Merge interactively-selected plugins into enabled_plugins
+        for name in selected {
+            if !config.enabled_plugins.contains(&name) {
+                config.enabled_plugins.push(name);
+            }
+        }
     }
 
     let config = Arc::new(config);
@@ -178,11 +178,9 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     let listener = TcpListener::bind(addr).await?;
-    eprintln!(
-        "Claudeway v{} listening on {addr}",
-        env!("CARGO_PKG_VERSION")
-    );
-    eprintln!("Keys loaded: {:?}", config.key_ids());
+
+    let enabled_plugin_names: Vec<String> = plugin_list.iter().map(|p| p.name().to_string()).collect();
+    startup::print_banner(&config, &enabled_plugin_names);
 
     plugin_ctx.emit(plugin::GatewayEvent::ServerStarted { port: config.port });
 

@@ -42,6 +42,10 @@ struct Cli {
     /// Enable specific plugins (overrides config file)
     #[arg(long, value_delimiter = ',')]
     enable_plugin: Vec<String>,
+
+    /// Skip interactive prompts (use defaults)
+    #[arg(long, short = 'f')]
+    force: bool,
 }
 
 pub struct Config {
@@ -57,6 +61,7 @@ pub struct Config {
     pub config_path: Option<PathBuf>,
     pub disabled_plugins: Vec<String>,
     pub enabled_plugins: Vec<String>,
+    pub force: bool,
 }
 
 impl Config {
@@ -88,6 +93,7 @@ impl Config {
             config_path: cli.config,
             disabled_plugins: cli.disable_plugin,
             enabled_plugins: cli.enable_plugin,
+            force: cli.force,
         })
     }
 
