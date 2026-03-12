@@ -141,6 +141,7 @@ pub async fn run_task_streaming(
         prompt.to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        "--verbose".to_string(),
     ];
 
     if let Some(m) = model {
@@ -169,6 +170,7 @@ pub async fn run_resume_streaming(
         prompt.to_string(),
         "--output-format".to_string(),
         "stream-json".to_string(),
+        "--verbose".to_string(),
         "--resume".to_string(),
         claude_session_id.to_string(),
     ];
@@ -215,13 +217,17 @@ async fn run_claude_streaming(
                 };
 
                 match event.get("type").and_then(|t| t.as_str()) {
-                    Some("content_block_delta") => {
+                    Some("assistant") => {
+                        // Extract text from message.content[0].text
                         if let Some(text) = event
-                            .get("delta")
-                            .and_then(|d| d.get("text"))
+                            .get("message")
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|item| item.get("text"))
                             .and_then(|t| t.as_str())
                         {
-                            accumulated_text.push_str(text);
+                            accumulated_text = text.to_string();
                             let _ = text_tx.send(accumulated_text.clone());
                         }
                     }
@@ -230,7 +236,7 @@ async fn run_claude_streaming(
                             .get("session_id")
                             .and_then(|s| s.as_str())
                             .map(String::from);
-                        cost_usd = event.get("cost_usd").and_then(|c| c.as_f64());
+                        cost_usd = event.get("total_cost_usd").and_then(|c| c.as_f64());
                         is_error = event
                             .get("is_error")
                             .and_then(|e| e.as_bool())
