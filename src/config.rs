@@ -50,6 +50,10 @@ struct Cli {
     /// Skip interactive prompts (use defaults)
     #[arg(long, short = 'f')]
     force: bool,
+
+    /// Disable --dangerously-skip-permissions (require Claude to ask for permission)
+    #[arg(long, env = "NO_PERMISSIONS_BYPASS")]
+    no_permissions_bypass: bool,
 }
 
 pub struct Config {
@@ -67,6 +71,7 @@ pub struct Config {
     pub disabled_plugins: Vec<String>,
     pub enabled_plugins: Vec<String>,
     pub force: bool,
+    pub bypass_permissions: bool,
 }
 
 impl Config {
@@ -100,6 +105,7 @@ impl Config {
             disabled_plugins: cli.disable_plugin,
             enabled_plugins: cli.enable_plugin,
             force: cli.force,
+            bypass_permissions: !cli.no_permissions_bypass,
         })
     }
 

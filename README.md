@@ -1,6 +1,8 @@
 <div align="center">
 
-# Claudeway
+<img src="assets/logo.svg" alt="Claudeway" width="300" />
+
+<br />
 
 ### Blazing-fast HTTP gateway for the Claude CLI
 

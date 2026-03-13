@@ -5,8 +5,14 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use chrono::Utc;
+use std::sync::atomic::Ordering;
+
 use crate::claude;
 use crate::config::Config;
+use crate::logging::ClaudeInvocationLog;
+use crate::plugin::{GatewayEvent, PluginContext};
+use crate::session::SessionMeta;
 
 use super::markdown;
 use super::repos::{self, RepoInfo};
@@ -323,6 +329,7 @@ pub async fn run_polling_loop(
     config: Arc<Config>,
     sessions: SessionMap,
     projects_dir: PathBuf,
+    plugin_ctx: PluginContext,
 ) {
     let client = reqwest::Client::new();
     let mut offset: i64 = 0;
@@ -403,6 +410,7 @@ pub async fn run_polling_loop(
             let projects_dir = projects_dir.clone();
 
             let sessions_file = sessions_file.clone();
+            let plugin_ctx = plugin_ctx.clone();
             tokio::spawn(async move {
                 handle_message(
                     &client,
@@ -415,6 +423,7 @@ pub async fn run_polling_loop(
                     &sessions,
                     &projects_dir,
                     &sessions_file,
+                    &plugin_ctx,
                 )
                 .await;
             });
@@ -433,6 +442,7 @@ async fn handle_message(
     sessions: &SessionMap,
     projects_dir: &std::path::Path,
     sessions_file: &std::path::Path,
+    plugin_ctx: &PluginContext,
 ) {
     // Determine the topic thread_id — handle repo selection flow
     // Check session state for existing thread_ids
@@ -642,7 +652,7 @@ async fn handle_message(
 
     // Run Claude with streaming
     let result =
-        handle_topic_message(prompt, effective_thread_id, config, sessions, text_tx).await;
+        handle_topic_message(prompt, effective_thread_id, config, sessions, text_tx, plugin_ctx).await;
 
     // Stop typing indicator
     typing_handle.abort();
@@ -794,6 +804,8 @@ async fn handle_message(
                             }
                         }
                         save_sessions(sessions, sessions_file).await;
+                        // Record stats for permission-approved retry
+                        record_telegram_stats(plugin_ctx, effective_thread_id, &workdir, &result);
                         let text = result.result.unwrap_or_else(|| "Done.".to_string());
                         let chunks = markdown::split_and_convert(&text);
                         for (i, chunk) in chunks.iter().enumerate() {
@@ -1064,6 +1076,7 @@ async fn handle_topic_message(
     config: &Config,
     sessions: &SessionMap,
     text_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    plugin_ctx: &PluginContext,
 ) -> anyhow::Result<claude::ClaudeResult> {
     // Get or create session + acquire per-topic lock
     let topic_lock = {
@@ -1116,12 +1129,95 @@ async fn handle_topic_message(
             } else {
                 tracing::warn!(thread_id, "Claude returned no session_id");
             }
+
+            // Record stats in gateway shared state for dashboard visibility
+            record_telegram_stats(plugin_ctx, thread_id, &workdir, &result);
+
             Ok(result)
         }
         Err(e) => {
             let err_msg = e.body.error;
             anyhow::bail!("{err_msg}")
         }
+    }
+}
+
+/// Record Telegram Claude invocations in the gateway's shared state so the
+/// dashboard plugin can see them (SessionStore, request_counter, KeyLogger, events).
+fn record_telegram_stats(
+    ctx: &PluginContext,
+    thread_id: i64,
+    workdir: &std::path::Path,
+    result: &claude::ClaudeResult,
+) {
+    let now = Utc::now();
+    let key_id = "telegram".to_string();
+    let session_id_str = format!("tg-{thread_id}");
+
+    // Increment request counter
+    ctx.request_counter.fetch_add(1, Ordering::Relaxed);
+
+    // Upsert into SessionStore
+    let store = &ctx.session_store;
+    // Deterministic UUID from thread_id so the same Telegram thread always maps to the same session
+    let uuid = uuid::Uuid::from_u64_pair(0x7E1E_6200_0000_0000, thread_id as u64);
+    if store.get(&uuid).is_some() {
+        store.update(&uuid, |meta| {
+            meta.last_used = now;
+            meta.task_count += 1;
+            if let Some(ref tokens) = result.tokens {
+                meta.tokens.accumulate(tokens);
+            }
+            if let Some(cost) = result.cost_usd {
+                meta.cost_usd += cost;
+            }
+        });
+    } else {
+        store.insert(SessionMeta {
+            session_id: uuid,
+            claude_session_id: result.claude_session_id.clone(),
+            created_at: now,
+            last_used: now,
+            model: None,
+            system_prompt: None,
+            workdir: workdir.to_path_buf(),
+            auto_workdir: false,
+            task_count: 1,
+            tokens: result.tokens.clone().unwrap_or_default(),
+            cost_usd: result.cost_usd.unwrap_or(0.0),
+            key_id: key_id.clone(),
+        });
+    }
+
+    // Log invocation
+    let log_entry = ClaudeInvocationLog {
+        timestamp: now.to_rfc3339(),
+        level: "INFO",
+        key_id: key_id.clone(),
+        session_id: session_id_str.clone(),
+        model: None,
+        exit_code: result.exit_code,
+        duration_ms: result.duration_ms,
+        success: result.success,
+        tokens: result.tokens.clone(),
+        cost_usd: result.cost_usd,
+        message: format!("Telegram Claude invocation for thread {thread_id}"),
+    };
+    ctx.key_logger.log_claude_invocation(&log_entry);
+
+    // Emit events
+    if let Some(ref tokens) = result.tokens {
+        ctx.emit(GatewayEvent::SessionCompleted {
+            session_id: session_id_str.clone(),
+            token_usage: tokens.clone(),
+        });
+    }
+    if let Some(cost) = result.cost_usd {
+        ctx.emit(GatewayEvent::CostRecorded {
+            key_id,
+            model: "unknown".to_string(),
+            cost,
+        });
     }
 }
 

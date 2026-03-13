@@ -65,10 +65,11 @@ impl Plugin for TelegramPlugin {
                 let chat_id = self.chat_id.clone();
                 let sessions = self.sessions.clone();
                 let projects_dir = self.projects_dir.clone();
+                let plugin_ctx = ctx.clone();
 
                 Box::pin(async move {
                     let handle = tokio::spawn(polling::run_polling_loop(
-                        bot_token, chat_id, config, sessions, projects_dir,
+                        bot_token, chat_id, config, sessions, projects_dir, plugin_ctx,
                     ));
                     let mut guard = self.polling_handle.lock().await;
                     *guard = Some(handle);
