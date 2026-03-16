@@ -45,6 +45,8 @@ use session::SessionStore;
         handlers::session::approve_permissions,
         handlers::stream::create_task_stream,
         handlers::stream::create_task_ws,
+        handlers::repos::sync_repo,
+        handlers::repos::list_repos,
     ),
     components(schemas(
         models::TokenUsage,
@@ -60,13 +62,18 @@ use session::SessionStore;
         models::DeleteSessionResponse,
         models::PermissionDenial,
         models::ApprovePermissionsRequest,
+        models::RepoSyncRequest,
+        models::RepoSyncResponse,
+        models::RepoInfo,
+        models::RepoListResponse,
         error::ApiError,
     )),
     tags(
         (name = "System", description = "Health and status endpoints"),
         (name = "Models", description = "Available Claude models"),
         (name = "Tasks", description = "One-shot Claude task execution"),
-        (name = "Sessions", description = "Persistent stateful Claude sessions")
+        (name = "Sessions", description = "Persistent stateful Claude sessions"),
+        (name = "Repos", description = "Git repository sync and management")
     ),
     security(("bearer" = []))
 )]
@@ -160,6 +167,8 @@ async fn main() -> anyhow::Result<()> {
                 .delete(handlers::session::delete_session),
         )
         .route("/session/{id}/approve", post(handlers::session::approve_permissions))
+        .route("/repos/sync", post(handlers::repos::sync_repo))
+        .route("/repos", get(handlers::repos::list_repos))
         .layer(middleware::from_fn(move |req, next| {
             let keys = api_keys.clone();
             auth::auth_middleware(req, next, keys)

@@ -119,6 +119,37 @@ pub struct DeleteSessionResponse {
     pub session_id: String,
 }
 
+// --- Repos ---
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RepoSyncRequest {
+    pub url: String,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepoSyncResponse {
+    pub path: String,
+    pub status: String,
+    pub branch: String,
+    pub commit: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepoInfo {
+    pub name: String,
+    pub path: String,
+    pub branch: String,
+    pub commit: String,
+    pub remote_url: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RepoListResponse {
+    pub repos_dir: String,
+    pub repos: Vec<RepoInfo>,
+}
+
 // --- Claude CLI parsing ---
 
 #[derive(Debug, Deserialize)]

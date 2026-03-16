@@ -54,6 +54,10 @@ struct Cli {
     /// Disable --dangerously-skip-permissions (require Claude to ask for permission)
     #[arg(long, env = "NO_PERMISSIONS_BYPASS")]
     no_permissions_bypass: bool,
+
+    /// Base directory for git repositories
+    #[arg(long, env = "REPOS_DIR")]
+    repos_dir: Option<String>,
 }
 
 pub struct Config {
@@ -72,6 +76,7 @@ pub struct Config {
     pub enabled_plugins: Vec<String>,
     pub force: bool,
     pub bypass_permissions: bool,
+    pub repos_dir: String,
 }
 
 impl Config {
@@ -106,6 +111,11 @@ impl Config {
             enabled_plugins: cli.enable_plugin,
             force: cli.force,
             bypass_permissions: !cli.no_permissions_bypass,
+            repos_dir: cli.repos_dir.unwrap_or_else(|| {
+                dirs_next::home_dir()
+                    .map(|h| h.join("repos").to_string_lossy().to_string())
+                    .unwrap_or_else(|| "./repos".to_string())
+            }),
         })
     }
 

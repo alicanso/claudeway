@@ -42,6 +42,7 @@ Built with Rust. Zero garbage collection. Sub-millisecond overhead.
   - [POST /task/stream](#post-taskstream)
   - [GET /task/ws](#get-taskws)
   - [Sessions](#sessions)
+  - [Repos](#repos)
 - [Configuration](#configuration)
   - [API Keys](#api-keys)
   - [Permission Approval](#permission-approval)
@@ -385,6 +386,60 @@ curl -X DELETE -H "Authorization: Bearer sk-your-key" http://localhost:3000/sess
 
 Concurrent requests to the same session are automatically serialized via per-session mutex locks — no race conditions on `--resume`.
 
+### Repos
+
+Clone or update git repositories on the server. Useful for setting up workdirs before sending tasks.
+
+#### `POST /repos/sync`
+
+Clone a new repo or pull updates for an existing one.
+
+```bash
+curl -X POST http://localhost:3000/repos/sync \
+  -H "Authorization: Bearer $CLAUDEWAY_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://github.com/alicanso/claudeway.git", "branch": "main"}'
+```
+```json
+{
+  "path": "/home/user/repos/claudeway",
+  "status": "cloned",
+  "branch": "main",
+  "commit": "abc123def456..."
+}
+```
+
+**Options:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | *required* | Git repository URL |
+| `branch` | string | — | Branch to checkout (uses repo default if omitted) |
+
+`status` is `"cloned"` for new repos, `"updated"` for existing ones.
+
+#### `GET /repos`
+
+List all synced repositories in the configured repos directory.
+
+```bash
+curl -H "Authorization: Bearer $CLAUDEWAY_KEY" http://localhost:3000/repos
+```
+```json
+{
+  "repos_dir": "/home/user/repos",
+  "repos": [
+    {
+      "name": "claudeway",
+      "path": "/home/user/repos/claudeway",
+      "branch": "main",
+      "commit": "abc123...",
+      "remote_url": "https://github.com/alicanso/claudeway.git"
+    }
+  ]
+}
+```
+
 ## Configuration
 
 Every option can be set via CLI flags, environment variables, or both. CLI flags take precedence.
@@ -395,6 +450,7 @@ Every option can be set via CLI flags, environment variables, or both. CLI flags
 | `--claude-bin` | `CLAUDE_BIN` | `claude` | Path to claude CLI binary |
 | `--workdir` | `CLAUDE_WORKDIR` | `/tmp/claude-tasks` | Base directory for session workdirs |
 | `--log-dir` | `LOG_DIR` | `./logs` | Base directory for per-key log files |
+| `--repos-dir` | `REPOS_DIR` | `~/repos` | Base directory for git repositories |
 | `--host` | `HOST` | `0.0.0.0` | HTTP listen host |
 | `-p, --port` | `PORT` | `3000` | HTTP listen port |
 | `--log-level` | `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
